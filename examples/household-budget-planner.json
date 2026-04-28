@@ -1,0 +1,27 @@
+{
+  "productName": "Household Budget Planner",
+  "level": "beginner",
+  "track": "business",
+  "productIdea": "A simple household budgeting workspace that helps families track income, spending categories, and monthly review without claiming financial advice.",
+  "targetAudience": "Household budget managers, partners sharing finances, and family members reviewing spending together.",
+  "problemStatement": "Households lose track of spending patterns, forget irregular bills, and struggle to align on financial priorities without a shared review tool.",
+  "constraints": "Keep the first release local-first and focused on tracking and review, not financial advice or investment guidance.",
+  "desiredOutput": "A build-ready markdown workspace with phased planning, budget categories, review flow, gates, verification files, handoff context, and enough clarity for a household budgeting tool.",
+  "mustHaveFeatures": "Income tracking, expense categories, monthly review view, shared household access, alert thresholds, non-advice disclaimers.",
+  "niceToHaveFeatures": "Recurring expense templates, savings goals, export to spreadsheet, bill reminders.",
+  "dataAndIntegrations": "Income entries, expense entries, category tags, monthly summary notes, alert rules.",
+  "risks": "The product could be mistaken for financial advice, budget data could be sensitive, and shared access could create conflict.",
+  "successMetrics": "A reviewer can trace income, expense categories, monthly review flow, and alert behavior with clear evidence.",
+  "nonGoals": "No investment advice, no bank integrations, no tax filing help.",
+  "timeline": "Plan a realistic first release that proves the household budgeting workflow works before adding richer features.",
+  "teamContext": "A household finance lead uses Xelera Method to prepare the budget planner plan and then hands the workspace to Codex, Claude Code, OpenCode, or a development team for phased implementation.",
+  "questionnaireAnswers": {
+    "north-star": "The release must make income, expenses, categories, and monthly review explicit enough for a household to use.",
+    "primary-workflow": "A budget manager enters income and expenses, reviews categories monthly, sets alert thresholds, and shares summaries with household members.",
+    "scope-cut": "Keep income tracking, expense categories, monthly review, and alerts in v1. Defer bank integrations, investment features, and tax help.",
+    "acceptance": "A reviewer should be able to trace budget categories, alert thresholds, and monthly review behavior without hidden assumptions.",
+    "operating-risks": "The main risks are financial advice overclaim, sensitive budget data exposure, and household conflict over spending.",
+    "customer-pain": "Households argue about money because they do not have a shared view of where it goes.",
+    "business-proof": "Fewer money arguments, clearer spending visibility, and better alignment on priorities."
+  }
+}

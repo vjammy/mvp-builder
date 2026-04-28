@@ -99,6 +99,11 @@ export function parseVerificationBullets(reportContent: string, heading: string)
     );
 }
 
+function parseVerificationSection(reportContent: string, heading: string) {
+  const section = reportContent.split(new RegExp(`## ${heading}`, 'i'))[1] || '';
+  return (section.split(/\n##\s+/)[0] || '').trim();
+}
+
 function normalizeEvidenceCandidate(line: string) {
   return line.trim().replace(/^`|`$/g, '');
 }
@@ -132,6 +137,44 @@ type EvidenceAssessment = {
   meaningfulFiles: string[];
   meaningfulNonScaffoldFiles: string[];
 };
+
+const GENERIC_EVIDENCE_PHRASES = [
+  'looks good',
+  'reviewed',
+  'complete',
+  'no issues',
+  'ready to proceed',
+  'everything passes',
+  'acceptable',
+  'approved'
+];
+
+const EVIDENCE_STOP_WORDS = new Set([
+  'the',
+  'and',
+  'for',
+  'that',
+  'with',
+  'from',
+  'this',
+  'phase',
+  'what',
+  'when',
+  'have',
+  'must',
+  'should',
+  'only',
+  'into',
+  'before',
+  'after',
+  'which',
+  'their',
+  'there',
+  'about',
+  'your',
+  'file',
+  'files'
+]);
 
 function isScaffoldEvidenceFile(evidencePath: string) {
   return DEFAULT_SCAFFOLD_EVIDENCE_BASENAMES.has(path.basename(evidencePath));
@@ -177,7 +220,50 @@ function stripEvidenceBoilerplate(content: string) {
   return filteredLines.join(' ');
 }
 
-function hasMeaningfulEvidenceContent(filePath: string, content: string) {
+function getPhaseKeywordSignals(packageRoot: string, filePath: string) {
+  const tokens: string[] = [];
+  const phaseSlugMatch = filePath.replace(/\\/g, '/').match(/phases\/(phase-\d+)/i);
+  const candidates = [path.join(packageRoot, 'PROJECT_BRIEF.md')];
+  if (phaseSlugMatch) {
+    candidates.push(path.join(packageRoot, 'phases', phaseSlugMatch[1], 'PHASE_BRIEF.md'));
+    candidates.push(path.join(packageRoot, 'phases', phaseSlugMatch[1], 'README.md'));
+  }
+
+  for (const candidate of candidates) {
+    if (!fileExists(candidate)) continue;
+    const content = readTextFile(candidate)
+      .toLowerCase()
+      .replace(/[^a-z0-9\s/-]/g, ' ');
+    tokens.push(
+      ...content
+        .split(/\s+/)
+        .filter(Boolean)
+        .filter((token) => token.length >= 5 && !EVIDENCE_STOP_WORDS.has(token))
+    );
+  }
+
+  return Array.from(new Set(tokens)).slice(0, 30);
+}
+
+function countSemanticEvidenceSignals(packageRoot: string, filePath: string, content: string) {
+  const stripped = stripEvidenceBoilerplate(content);
+  const normalized = stripped.toLowerCase();
+  const phaseKeywords = getPhaseKeywordSignals(packageRoot, filePath);
+  const categories = {
+    fileRefs: /\b[\w./-]+\.(md|ts|tsx|js|jsx|json|css|html|yml|yaml|sql|txt)\b/i.test(content),
+    commands: /(^|\n)\s*[-*]?\s*(`)?(npm|pnpm|yarn|node|git|npx|tsc|next|vitest|jest|playwright|curl)\b/i.test(content),
+    scenario: /\b(scenario|flow|case|when|after|before|while|checked|inspected|reviewed)\b/i.test(normalized),
+    observed: /\b(observed|result|returned|showed|displayed|failed|passed|blocked|confirmed|matched|saw)\b/i.test(normalized),
+    decision: /\b(decided|deferred|kept|cut|approved|blocked|assumption|scope|boundary|tradeoff)\b/i.test(normalized),
+    blocker: /\b(blocker|issue|defect|warning|cannot|failed|not ready|do not advance)\b/i.test(normalized),
+    keywords: phaseKeywords.some((keyword) => normalized.includes(keyword))
+  };
+  const matchedCount = Object.values(categories).filter(Boolean).length;
+  const genericPhraseCount = GENERIC_EVIDENCE_PHRASES.filter((phrase) => normalized.includes(phrase)).length;
+  return { categories, matchedCount, genericPhraseCount, stripped };
+}
+
+function hasMeaningfulEvidenceContent(packageRoot: string, filePath: string, content: string) {
   const baseName = path.basename(filePath);
   const extension = path.extname(filePath).toLowerCase();
 
@@ -190,11 +276,13 @@ function hasMeaningfulEvidenceContent(filePath: string, content: string) {
       .split(/\r?\n/)
       .map((line) => line.trim())
       .filter((line) => /^-\s+[^:]+:\s+\S+/.test(line))
-      .filter((line) => !/:\s*$/.test(line));
-    return completedLines.length >= 2;
+      .filter((line) => !/:\s*$/.test(line))
+      .filter((line) => !/pending update/i.test(line));
+    return completedLines.length >= 4;
   }
 
   if (baseName === 'NEXT_PHASE_CONTEXT.md') {
+    if (/pending update/i.test(content)) return false;
     const inheritSection = content.split(/## What the next phase should inherit/i)[1]?.split(/\n##\s+/)[0] || '';
     const inheritBullets = inheritSection
       .split(/\r?\n/)
@@ -234,8 +322,14 @@ function hasMeaningfulEvidenceContent(filePath: string, content: string) {
     .replace(/[^a-z0-9]+/g, ' ')
     .split(/\s+/)
     .filter(Boolean);
+  const semanticSignals = countSemanticEvidenceSignals(packageRoot, filePath, content);
+  const genericOnly =
+    semanticSignals.genericPhraseCount > 0 &&
+    semanticSignals.matchedCount < 3 &&
+    !semanticSignals.categories.fileRefs &&
+    !semanticSignals.categories.commands;
 
-  return stripped.length >= 40 && tokens.length >= 6;
+  return stripped.length >= 40 && tokens.length >= 6 && semanticSignals.matchedCount >= 3 && !genericOnly;
 }
 
 export function assessEvidenceFilesForApproval(packageRoot: string, evidenceFiles: string[]): EvidenceAssessment {
@@ -251,9 +345,9 @@ export function assessEvidenceFilesForApproval(packageRoot: string, evidenceFile
     }
 
     const content = readTextFile(absoluteEvidencePath);
-    if (!hasMeaningfulEvidenceContent(absoluteEvidencePath, content)) {
+    if (!hasMeaningfulEvidenceContent(packageRoot, absoluteEvidencePath, content)) {
       issues.push(
-        `Evidence file "${evidenceFile}" does not contain enough completed content yet. Add real notes, results, or proof instead of headings, comments, empty checklists, or template placeholders.`
+        `Evidence file "${evidenceFile}" is too generic or incomplete. Add concrete proof such as changed files, command output, a scenario checked, the observed result, a decision made, a blocker found, or a specific artifact reviewed for this phase.`
       );
       continue;
     }
@@ -273,4 +367,23 @@ export function assessEvidenceFilesForApproval(packageRoot: string, evidenceFile
     meaningfulFiles,
     meaningfulNonScaffoldFiles
   };
+}
+
+export function findVerificationBodyContradictions(reportContent: string) {
+  const bodySections = ['summary', 'warnings', 'defects found', 'follow-up actions', 'final decision']
+    .map((heading) => parseVerificationSection(reportContent, heading))
+    .join('\n')
+    .toLowerCase();
+
+  const contradictionPatterns = [
+    /\bblocked\b/,
+    /\bnot ready\b/,
+    /\bfailed\b/,
+    /\bcannot proceed\b/,
+    /\bshould not proceed\b/,
+    /\bunresolved blocker\b/,
+    /\bdo not advance\b/
+  ];
+
+  return contradictionPatterns.some((pattern) => pattern.test(bodySections));
 }

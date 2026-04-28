@@ -1,4 +1,12 @@
-import type { CritiqueItem, ProjectInput, QuestionnaireItem, ScoreBreakdown, ScoreCategory } from './types';
+import type {
+  CritiqueItem,
+  LifecycleStatus,
+  ProjectInput,
+  QuestionnaireItem,
+  ScoreBreakdown,
+  ScoreCategory,
+  WarningItem
+} from './types';
 
 function splitItems(value: string) {
   return value
@@ -333,6 +341,51 @@ export function scoreProject(
     total,
     rating,
     blockers,
-    recommendations
+    recommendations,
+    adjustments: []
+  };
+}
+
+export function reconcileScoreWithLifecycle(
+  score: ScoreBreakdown,
+  lifecycleStatus: LifecycleStatus,
+  warnings: WarningItem[]
+): ScoreBreakdown {
+  const hasBlockers = warnings.some((warning) => warning.severity === 'blocker');
+  let total = score.total;
+  let rating = score.rating;
+  const adjustments = [...score.adjustments];
+
+  if (lifecycleStatus === 'Blocked') {
+    if (total > 71) {
+      total = 71;
+      adjustments.push('Score capped at 71 because the package lifecycle is Blocked.');
+    }
+    if (rating === 'Build ready' || rating === 'Strong handoff') {
+      rating = total >= 52 ? 'Needs work' : 'Not ready';
+      adjustments.push('Rating downgraded because blocked packages cannot claim build readiness.');
+    }
+  }
+
+  if (lifecycleStatus === 'Draft' && (rating === 'Build ready' || rating === 'Strong handoff')) {
+    rating = 'Needs work';
+    adjustments.push('Rating downgraded because Draft packages are not ready to claim build readiness.');
+  }
+
+  if (lifecycleStatus === 'ReviewReady' && rating === 'Strong handoff' && hasBlockers) {
+    rating = 'Needs work';
+    adjustments.push('Rating downgraded because unresolved blockers still exist.');
+  }
+
+  if (hasBlockers && rating === 'Strong handoff') {
+    rating = total >= 52 ? 'Needs work' : 'Not ready';
+    adjustments.push('Rating downgraded because unresolved blockers outweigh the raw score.');
+  }
+
+  return {
+    ...score,
+    total,
+    rating,
+    adjustments: Array.from(new Set(adjustments))
   };
 }

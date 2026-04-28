@@ -1,5 +1,5 @@
-import { scoreProject } from './scoring';
-import { buildQuestionPrompts, getProfileConfig, slugify } from './templates';
+import { reconcileScoreWithLifecycle, scoreProject } from './scoring';
+import { buildQuestionPrompts, CORE_AGENT_OPERATING_RULES, getProfileConfig, slugify } from './templates';
 import type {
   CritiqueItem,
   GeneratedFile,
@@ -31,11 +31,24 @@ type PhaseBlueprint = {
     | 'observability'
     | 'handoff'
     | 'rollout'
-    | 'scaling';
+    | 'scaling'
+    | 'permissions'
+    | 'emergency'
+    | 'qualification'
+    | 'ordering'
+    | 'budgeting'
+    | 'scheduling'
+    | 'maintenance'
+    | 'events'
+    | 'inventory'
+    | 'review';
   name: string;
   rationale: string;
   primaryInputs: string[];
   confirmationPrompts: string[];
+  phaseType: PhasePlan['phaseType'];
+  outputs?: string[];
+  repoTargets?: string[];
 };
 
 type ProjectContext = {
@@ -57,6 +70,21 @@ type ProjectContext = {
   riskAnchor: string;
   acceptanceAnchor: string;
   inferredAssumptions: string[];
+  domainArchetype:
+    | 'family-task'
+    | 'family-readiness'
+    | 'sdr-sales'
+    | 'restaurant-ordering'
+    | 'budget-planner'
+    | 'clinic-scheduler'
+    | 'hoa-maintenance'
+    | 'school-club'
+    | 'volunteer-manager'
+    | 'inventory'
+    | 'general';
+  domainSignals: string[];
+  riskFlags: Array<'children' | 'medical' | 'legal' | 'emergency' | 'privacy' | 'money' | 'sensitive-data'>;
+  uiRelevant: boolean;
 };
 
 type AgentName = 'Codex' | 'Claude Code' | 'OpenCode';
@@ -86,10 +114,43 @@ function listToBullets(items: string[], fallback: string) {
   return finalItems.map((item) => `- ${item}`).join('\n');
 }
 
-function truncateText(value: string, maxWords: number) {
-  const parts = value.trim().split(/\s+/).filter(Boolean);
-  if (parts.length <= maxWords) return value.trim();
-  return `${parts.slice(0, maxWords).join(' ')}...`;
+function truncateText(value: string, _maxWords: number) {
+  return value.trim();
+}
+
+const crossDomainEchoTerms: Record<string, string[]> = {
+  medical: [
+    'clinical',
+    'patient',
+    'provider',
+    'physician',
+    'health record',
+    'hipaa',
+    'medication',
+    'healthcare'
+  ],
+  sdr: [
+    'sales qualification',
+    'lead scoring',
+    'lead qualification',
+    'rep handoff',
+    'sales pipeline',
+    'prospecting'
+  ]
+};
+
+function sanitizeCrossDomainEcho(text: string, domainArchetype: ProjectContext['domainArchetype']): string {
+  const isMedical = domainArchetype === 'clinic-scheduler';
+  const isSdr = domainArchetype === 'sdr-sales';
+  let result = text;
+  for (const [domain, terms] of Object.entries(crossDomainEchoTerms)) {
+    if ((domain === 'medical' && isMedical) || (domain === 'sdr' && isSdr)) continue;
+    for (const term of terms) {
+      const pattern = new RegExp(`\\b${term}\\b`, 'gi');
+      result = result.replace(pattern, '[non-applicable domain reference]');
+    }
+  }
+  return result;
 }
 
 function normalizeTokens(value: string) {
@@ -98,6 +159,511 @@ function normalizeTokens(value: string) {
     .replace(/[^a-z0-9\s-]/g, ' ')
     .split(/\s+/)
     .filter(Boolean);
+}
+
+function unique<T>(items: T[]) {
+  return Array.from(new Set(items));
+}
+
+function getDomainFillerNames(
+  domainArchetype: ProjectContext['domainArchetype'],
+  input: ProjectInput
+): Array<{ tag: PhaseBlueprint['tag']; name: string; rationale: string; phaseType: PhasePlan['phaseType'] }> {
+  const base = input.productName;
+  switch (domainArchetype) {
+    case 'family-task':
+      return [
+        { tag: 'review', name: `${base} Household Routine Dry Run`, rationale: `Walk through a typical weekday and weekend routine to confirm task assignments, reminders, and parent approvals behave realistically before implementation.`, phaseType: 'verification' },
+        { tag: 'review', name: `${base} Chore Change Review`, rationale: `Review what happens when a chore is added, removed, or reassigned mid-week so the household workflow does not break.`, phaseType: 'verification' },
+        { tag: 'review', name: `${base} Child Visibility Spot Check`, rationale: `Confirm that child users see only their own tasks and cannot access parent-only settings or other children's data.`, phaseType: 'verification' }
+      ];
+    case 'family-readiness':
+      return [
+        { tag: 'review', name: `${base} Emergency Access Readiness Review`, rationale: `Verify that emergency contacts are current, document references are reachable, and the emergency-mode boundary language is still accurate.`, phaseType: 'verification' },
+        { tag: 'review', name: `${base} Legal Caveat Refresh`, rationale: `Re-read the disclaimers and boundary notes to confirm they have not drifted into implied legal or emergency authority.`, phaseType: 'verification' },
+        { tag: 'review', name: `${base} Household Role Handoff Check`, rationale: `Confirm that co-parents and caregivers understand their roles and can access the readiness information they need.`, phaseType: 'verification' }
+      ];
+    case 'sdr-sales':
+      return [
+        { tag: 'review', name: `${base} Lead Qualification Edge Case Review`, rationale: `Test the qualification rules against borderline leads to confirm the SDR knows when to advance, block, or escalate.`, phaseType: 'verification' },
+        { tag: 'review', name: `${base} Sequence Follow-Through Audit`, rationale: `Check that outreach sequences include realistic follow-up timing and do not drop leads silently.`, phaseType: 'verification' },
+        { tag: 'review', name: `${base} AE Handoff Context Check`, rationale: `Verify that the handoff to account executives includes enough context for the AE to continue the conversation.`, phaseType: 'verification' }
+      ];
+    case 'restaurant-ordering':
+      return [
+        { tag: 'review', name: `${base} Kitchen Workflow Dry Run`, rationale: `Simulate a rush-hour order flow to confirm kitchen queue states and handoff timing do not collapse under volume.`, phaseType: 'verification' },
+        { tag: 'review', name: `${base} Menu Change Review`, rationale: `Review what happens when a menu item is removed or modified mid-service so the ordering flow stays coherent.`, phaseType: 'verification' },
+        { tag: 'review', name: `${base} Pickup Timing Stress Test`, rationale: `Check that ready-for-pickup notifications and customer timing expectations remain accurate when the kitchen is behind.`, phaseType: 'verification' }
+      ];
+    case 'budget-planner':
+      return [
+        { tag: 'review', name: `${base} Spending Threshold Reality Check`, rationale: `Compare the budget thresholds against actual household spending patterns to confirm alerts fire at useful moments.`, phaseType: 'verification' },
+        { tag: 'review', name: `${base} Non-Advice Boundary Review`, rationale: `Re-read any language that could be interpreted as financial advice and confirm the disclaimer is still prominent.`, phaseType: 'verification' },
+        { tag: 'review', name: `${base} Shared Budget Visibility Review`, rationale: `Confirm that household members see only the budget data they should and sensitive details remain hidden.`, phaseType: 'verification' }
+      ];
+    case 'clinic-scheduler':
+      return [
+        { tag: 'review', name: `${base} Provider Availability Stress Check`, rationale: `Test scheduling conflicts and double-booking scenarios to confirm the clinic can recover gracefully.`, phaseType: 'verification' },
+        { tag: 'review', name: `${base} Reminder Privacy Scrub`, rationale: `Review reminder wording to confirm no sensitive clinical details leak into patient-facing notifications.`, phaseType: 'verification' },
+        { tag: 'review', name: `${base} Waitlist Handoff Review`, rationale: `Verify that waitlist notifications respect patient priority and do not create confusion when slots open.`, phaseType: 'verification' }
+      ];
+    case 'hoa-maintenance':
+      return [
+        { tag: 'review', name: `${base} Resident Request Triage Review`, rationale: `Review how maintenance requests are categorized, assigned, and tracked so residents understand status without calling.`, phaseType: 'verification' },
+        { tag: 'review', name: `${base} Vendor Escalation Path Check`, rationale: `Confirm that stalled requests escalate to the board after a defined timeout and do not disappear.`, phaseType: 'verification' },
+        { tag: 'review', name: `${base} Status Update Continuity Audit`, rationale: `Verify that residents receive updates at key stages and that status language is consistent across all phases.`, phaseType: 'verification' }
+      ];
+    case 'school-club':
+      return [
+        { tag: 'review', name: `${base} Student Privacy Boundary Review`, rationale: `Confirm that students see only events and content appropriate to their role and that advisor oversight is preserved.`, phaseType: 'verification' },
+        { tag: 'review', name: `${base} Event Sign-Up Edge Case Check`, rationale: `Test what happens when events reach capacity, are cancelled, or have conflicting times.`, phaseType: 'verification' },
+        { tag: 'review', name: `${base} Club Exit Access Review`, rationale: `Verify that a student who leaves a club loses access to private content and announcements promptly.`, phaseType: 'verification' }
+      ];
+    case 'volunteer-manager':
+      return [
+        { tag: 'review', name: `${base} Shift Coverage Gap Review`, rationale: `Check how the organizer discovers and fills gaps when volunteers cancel or fail to show up.`, phaseType: 'verification' },
+        { tag: 'review', name: `${base} No-Show Response Drill`, rationale: `Walk through the no-show workflow to confirm the organizer can recover without scrambling.`, phaseType: 'verification' },
+        { tag: 'review', name: `${base} Check-In Accuracy Spot Check`, rationale: `Verify that check-in status reflects reality and that volunteers who checked in are correctly recorded.`, phaseType: 'verification' }
+      ];
+    case 'inventory':
+      return [
+        { tag: 'review', name: `${base} Low Stock Reorder Review`, rationale: `Review low-stock alerts and purchase-plan deferrals to confirm they match real reorder needs.`, phaseType: 'verification' },
+        { tag: 'review', name: `${base} Adjustment Trust Check`, rationale: `Verify that adjustments require a reason and timestamp and that the history is reviewable without ambiguity.`, phaseType: 'verification' },
+        { tag: 'review', name: `${base} Stock State Boundary Audit`, rationale: `Confirm that stock states are defined clearly enough that a new employee can understand them without training.`, phaseType: 'verification' }
+      ];
+    default:
+      return [
+        { tag: 'review', name: `${base} Workflow Edge Case Review`, rationale: `Test the core workflow against at least one realistic failure path to confirm the plan handles friction, not just the happy path.`, phaseType: 'verification' },
+        { tag: 'review', name: `${base} Scope Drift Check`, rationale: `Re-read the current plan against the original brief to confirm no unjustified expansion or silent deferral has occurred.`, phaseType: 'verification' },
+        { tag: 'review', name: `${base} Evidence Quality Audit`, rationale: `Verify that evidence files name actual files, scenarios, or decisions instead of placeholder claims.`, phaseType: 'verification' }
+      ];
+  }
+}
+
+function getPhaseTypeSpecificChecks(
+  phase: PhasePlan,
+  context: ProjectContext,
+  input: ProjectInput
+): Array<{ check: string; pass: string; fail: string; artifact: string; goodLooks: string; failureLooks: string; evidence: string; regressionRisk: string; domainScenario: string }> {
+  const checks: Array<{ check: string; pass: string; fail: string; artifact: string; goodLooks: string; failureLooks: string; evidence: string; regressionRisk: string; domainScenario: string }> = [];
+
+  const domainName = input.productName;
+  const audience = context.primaryAudience;
+  const feature = context.primaryFeature;
+  const slug = phase.slug;
+
+  if (phase.phaseType === 'planning') {
+    checks.push({
+      check: `Inspect PHASE_BRIEF.md and confirm the planning output names concrete ${feature} decisions rather than restating the product idea.`,
+      pass: `The brief names at least three specific decisions, scope cuts, or constraints for ${domainName}.`,
+      fail: `The brief restates the product idea without naming what gets built, deferred, or ruled out.`,
+      artifact: `phases/${slug}/PHASE_BRIEF.md`,
+      goodLooks: `A short list of v1 scope decisions with clear deferrals and non-goals.`,
+      failureLooks: `Generic sentences like "plan the product" without naming features or boundaries.`,
+      evidence: `Copy the exact decision bullets into TEST_RESULTS.md.`,
+      regressionRisk: `If planning stays generic, later phases build on vague assumptions and rework risk rises.`,
+      domainScenario: `A reviewer asks: "If I remove the product name, could this brief apply to any project?" The answer must be no.`
+    });
+  }
+
+  if (phase.phaseType === 'design') {
+    checks.push({
+      check: `Inspect the design artifact and confirm it maps a realistic ${audience} workflow with at least one failure path.`,
+      pass: `The design names states, transitions, and error handling that ${audience} would actually encounter.`,
+      fail: `The design shows only a happy path or uses generic labels like "user does action" without naming the action.`,
+      artifact: `phases/${slug}/PHASE_BRIEF.md and any workflow notes`,
+      goodLooks: `A state map or flow with specific states, decision points, and what happens when something goes wrong.`,
+      failureLooks: `A single linear list of steps with no branches, errors, or role-specific behavior.`,
+      evidence: `Paste the state names or flow summary into TEST_RESULTS.md.`,
+      regressionRisk: `If design skips failure paths, implementation will miss edge cases and support load will spike.`,
+      domainScenario: `A reviewer asks: "What happens when ${feature} fails or ${audience} makes a mistake?" The design must answer this.`
+    });
+  }
+
+  if (phase.phaseType === 'implementation') {
+    checks.push({
+      check: `Run the build and confirm changed files are listed in HANDOFF_SUMMARY.md with observed results.`,
+      pass: `Build passes and HANDOFF_SUMMARY.md names the files changed and why.`,
+      fail: `Build fails, or handoff is blank, or files are changed without being recorded.`,
+      artifact: `repo files and phases/${slug}/HANDOFF_SUMMARY.md`,
+      goodLooks: `A build log showing PASS and a handoff listing each changed file with a one-line reason.`,
+      failureLooks: `A build error or a handoff that says "updated files" without naming them.`,
+      evidence: `Copy build output and the changed-files list into TEST_RESULTS.md.`,
+      regressionRisk: `If implementation changes are not tracked, rollback and debugging become impossible.`,
+      domainScenario: `A reviewer asks: "If this change breaks ${feature}, which file should I revert first?" The handoff must name it.`
+    });
+  }
+
+  if (phase.phaseType === 'verification') {
+    checks.push({
+      check: `Inspect TEST_PLAN.md and confirm the verification scenarios are specific to ${domainName} and not generic boilerplate.`,
+      pass: `Scenarios name real ${feature} behavior, ${audience} actions, and observable pass/fail criteria.`,
+      fail: `Scenarios are copy-paste templates that could apply to any project.`,
+      artifact: `phases/${slug}/TEST_PLAN.md`,
+      goodLooks: `A scenario like "${audience} attempts ${feature} with invalid input and sees error X."`,
+      failureLooks: `A scenario like "Test the feature and confirm it works."`,
+      evidence: `Paste the scenario text and your observed result into TEST_RESULTS.md.`,
+      regressionRisk: `If verification is generic, bugs slip through because no one tested the actual domain behavior.`,
+      domainScenario: `A reviewer asks: "Show me the test that would catch a broken ${feature} workflow." The plan must name it.`
+    });
+  }
+
+  if (phase.phaseType === 'finalization' || phase.phaseType === 'handoff') {
+    checks.push({
+      check: `Inspect the final handoff package and confirm it includes release caveats, known blockers, and next-builder guidance.`,
+      pass: `The handoff warns about what is not finished, what could break, and what the next builder should do first.`,
+      fail: `The handoff claims the project is "complete" without caveats or next-step guidance.`,
+      artifact: `phases/${slug}/HANDOFF_SUMMARY.md and NEXT_PHASE_CONTEXT.md`,
+      goodLooks: `A candid list of what works, what is deferred, and what the next builder must confirm before coding.`,
+      failureLooks: `A single sentence like "Project is ready" with no context about risks or next steps.`,
+      evidence: `Copy the caveat list and next-builder instructions into TEST_RESULTS.md.`,
+      regressionRisk: `If the handoff hides gaps, the next builder starts with false confidence and introduces defects.`,
+      domainScenario: `A reviewer asks: "If I pick this up in six months, what will confuse me first?" The handoff must answer this.`
+    });
+  }
+
+  // Domain-specific additional checks
+  if (context.domainArchetype === 'restaurant-ordering') {
+    checks.push({
+      check: `Confirm the order state map includes at least these states: created, acknowledged, in-progress, ready, picked-up, and cancelled.`,
+      pass: `All required states are named with clear transitions.`,
+      fail: `States are missing or transitions between kitchen and customer are vague.`,
+      artifact: `phases/${slug}/PHASE_BRIEF.md or workflow notes`,
+      goodLooks: `A state diagram or list showing exactly how an order moves from phone to pickup.`,
+      failureLooks: `A paragraph describing ordering without named states or transitions.`,
+      evidence: `List the states and transitions in TEST_RESULTS.md.`,
+      regressionRisk: `Missing order states cause kitchen confusion and wrong pickup updates.`,
+      domainScenario: `A kitchen staff member asks: "How do I know when to start cooking?" The state map must answer this.`
+    });
+  }
+
+  if (context.domainArchetype === 'sdr-sales') {
+    checks.push({
+      check: `Confirm the qualification criteria name at least one signal that blocks a lead from advancing and one signal that advances it.`,
+      pass: `Clear advance/block signals are documented with examples.`,
+      fail: `Qualification is described as "SDR decides" without criteria.`,
+      artifact: `phases/${slug}/PHASE_BRIEF.md or qualification notes`,
+      goodLooks: `A checklist with concrete examples, e.g., "Has budget authority = advance; No response after 3 touches = block."`,
+      failureLooks: `Vague guidance like "qualify based on fit."`,
+      evidence: `Paste the advance/block criteria into TEST_RESULTS.md.`,
+      regressionRisk: `Vague qualification criteria cause inconsistent pipeline and poor AE handoffs.`,
+      domainScenario: `An SDR asks: "This lead replied once but didn't book a meeting. What do I do?" The criteria must answer this.`
+    });
+  }
+
+  if (context.domainArchetype === 'inventory') {
+    checks.push({
+      check: `Confirm low-stock thresholds include the metric (units, days, or ratio) and the person responsible for review.`,
+      pass: `Thresholds are numeric or time-based and an owner role is named.`,
+      fail: `Thresholds are vague like "when low" and no one is assigned to review.`,
+      artifact: `phases/${slug}/PHASE_BRIEF.md or threshold notes`,
+      goodLooks: `A table with item category, threshold value, and reviewer role.`,
+      failureLooks: `A sentence like "alert when stock is low" without numbers or owners.`,
+      evidence: `Copy the threshold table into TEST_RESULTS.md.`,
+      regressionRisk: `Unclear thresholds cause stockouts or over-ordering.`,
+      domainScenario: `A store manager asks: "How low is 'low' for seasonal items vs. daily staples?" The threshold table must answer this.`
+    });
+  }
+
+  if (context.domainArchetype === 'family-readiness') {
+    checks.push({
+      check: `Confirm emergency-mode boundaries explicitly state what the product does NOT provide (legal advice, emergency dispatch, medical diagnosis).`,
+      pass: `A clear do-not-claim list is visible in the phase output.`,
+      fail: `The output implies authority or help it cannot deliver.`,
+      artifact: `phases/${slug}/PHASE_BRIEF.md or boundary notes`,
+      goodLooks: `A bulleted boundary list: "This product does not provide legal advice, call 911, or replace insurance documents."`,
+      failureLooks: `Language like "protect your family legally" or "emergency response guide."`,
+      evidence: `Copy the boundary list into TEST_RESULTS.md.`,
+      regressionRisk: `Overclaiming legal or emergency authority creates liability and erodes trust.`,
+      domainScenario: `A parent asks during a real emergency: "Will this call an ambulance?" The boundary list must prevent that assumption.`
+    });
+  }
+
+  if (context.domainArchetype === 'family-task') {
+    checks.push({
+      check: `Confirm child visibility rules state exactly what a child user can see, edit, and complete, and what is parent-only.`,
+      pass: `A role matrix or list separates child actions from parent actions.`,
+      fail: `Permissions are described as "kids can see their tasks" without defining "their" or what they cannot do.`,
+      artifact: `phases/${slug}/PHASE_BRIEF.md or permission notes`,
+      goodLooks: `A table: Child can view assigned tasks, mark complete, upload photo proof. Cannot edit due date, assign others, or view parent dashboard.`,
+      failureLooks: `A vague sentence like "children have limited access."`,
+      evidence: `Paste the role matrix into TEST_RESULTS.md.`,
+      regressionRisk: `Ambiguous child permissions leak data or create household conflict.`,
+      domainScenario: `A child asks: "Why can I see my sister's chores but not my allowance?" The role matrix must explain the boundary.`
+    });
+  }
+
+  if (context.domainArchetype === 'clinic-scheduler') {
+    checks.push({
+      check: `Confirm reminder wording is shown in the artifact and contains no sensitive clinical details (diagnosis, medication, procedure).`,
+      pass: `A sample reminder is provided and scrubbed for clinical content.`,
+      fail: `Reminder content is not shown, or it includes clinical details that should stay private.`,
+      artifact: `phases/${slug}/PHASE_BRIEF.md or reminder notes`,
+      goodLooks: `A sample reminder: "You have an appointment tomorrow at 2 PM with Dr. Smith." No diagnosis or treatment mentioned.`,
+      failureLooks: `A reminder like "Remember to take your blood pressure medication before your cardiology follow-up."`,
+      evidence: `Copy the sample reminder into TEST_RESULTS.md.`,
+      regressionRisk: `Sensitive details in reminders violate privacy and create HIPAA risk.`,
+      domainScenario: `A patient forwards their reminder to a coworker. What do they reveal? The sample reminder must be safe.`
+    });
+  }
+
+  if (context.riskFlags.includes('money')) {
+    checks.push({
+      check: `Confirm the output includes a clear disclaimer that ${domainName} is not financial advice and does not provide investment guidance.`,
+      pass: `A boundary disclaimer is visible and specific to the domain.`,
+      fail: `The output includes budgeting tips, spending recommendations, or implied authority.`,
+      artifact: `phases/${slug}/PHASE_BRIEF.md or boundary notes`,
+      goodLooks: `A statement: "This tool tracks spending for awareness only. It does not provide financial advice."`,
+      failureLooks: `Language like "save 20% on groceries" or "you should invest the surplus."`,
+      evidence: `Copy the disclaimer into TEST_RESULTS.md.`,
+      regressionRisk: `Implied financial advice creates legal exposure and user harm.`,
+      domainScenario: `A user asks: "Should I buy this stock?" The product must not answer that question.`
+    });
+  }
+
+  if (context.riskFlags.includes('privacy') || context.riskFlags.includes('sensitive-data')) {
+    checks.push({
+      check: `Confirm the output names which roles can see which data and what is minimized or hidden.`,
+      pass: `A visibility matrix or list defines data access per role.`,
+      fail: `The output says "data is secure" without defining who sees what.`,
+      artifact: `phases/${slug}/PHASE_BRIEF.md or data notes`,
+      goodLooks: `A table mapping each role to the data fields they can read, write, or never see.`,
+      failureLooks: `A generic claim like "we take privacy seriously."`,
+      evidence: `Paste the visibility matrix into TEST_RESULTS.md.`,
+      regressionRisk: `Undocumented visibility rules cause data leaks and compliance failures.`,
+      domainScenario: `An auditor asks: "Show me who can see personal phone numbers." The matrix must answer this.`
+    });
+  }
+
+  return checks;
+}
+
+function getDomainTestScenarios(
+  domainArchetype: ProjectContext['domainArchetype'],
+  riskFlags: ProjectContext['riskFlags']
+): string[] {
+  const scenarios: string[] = [];
+
+  switch (domainArchetype) {
+    case 'family-task':
+      scenarios.push(
+        'A parent assigns a chore to a child and confirms the child can only see their own tasks.',
+        'A kid marks a task complete and the parent receives a notification for approval.',
+        'A co-parent joins the workspace and sees the same household view as the primary parent.',
+        'Reminder timing is reviewed to confirm it does not spam family members.'
+      );
+      break;
+    case 'family-readiness':
+      scenarios.push(
+        'A family member opens the emergency contact list and confirms all numbers are current.',
+        'The readiness package clearly states it is not legal advice and does not dispatch emergency services.',
+        'A parent organizer updates a document reference and the change is visible to other adults.',
+        'Outdated readiness information is flagged during review.'
+      );
+      break;
+    case 'sdr-sales':
+      scenarios.push(
+        'An SDR captures a lead and selects the correct outreach sequence.',
+        'A lead responds to an email and the SDR updates qualification signals.',
+        'A qualified lead is handed off to an AE with full interaction history.',
+        'A blocked lead is documented with clear follow-up rules instead of being dropped.'
+      );
+      break;
+    case 'restaurant-ordering':
+      scenarios.push(
+        'A customer places a pickup order and receives an estimated ready time.',
+        'The kitchen acknowledges the order and updates the order state.',
+        'The customer receives a notification when the order is ready for pickup.',
+        'An order cancellation updates the kitchen queue without confusion.'
+      );
+      break;
+    case 'budget-planner':
+      scenarios.push(
+        'A budget manager enters income and expenses and sees a monthly summary.',
+        'An alert fires when a category exceeds its threshold.',
+        'A household member views the budget without seeing sensitive details from other members.',
+        'The product displays a clear disclaimer that it is not financial advice.'
+      );
+      break;
+    case 'clinic-scheduler':
+      scenarios.push(
+        'A scheduler books an appointment and the provider calendar shows the conflict check.',
+        'A reminder is drafted and reviewed to confirm no sensitive clinical details are exposed.',
+        'A patient cancels and the waitlist is notified in priority order.',
+        'A double-booking attempt is blocked with a clear error message.'
+      );
+      break;
+    case 'hoa-maintenance':
+      scenarios.push(
+        'A resident submits a maintenance request with a photo and description.',
+        'A board member triages the request and assigns a vendor.',
+        'The resident receives status updates at key stages.',
+        'A stalled request is escalated to the board after a defined timeout.'
+      );
+      break;
+    case 'school-club':
+      scenarios.push(
+        'A student joins a club and sees only events they are allowed to view.',
+        'An advisor reviews event sign-ups and confirms student privacy boundaries.',
+        'A club organizer posts an announcement and targets the correct audience.',
+        'A student leaves a club and loses access to private club content.'
+      );
+      break;
+    case 'volunteer-manager':
+      scenarios.push(
+        'An organizer creates event shifts with required roles and times.',
+        'A volunteer signs up for a shift and receives a confirmation.',
+        'A no-show is recorded and the organizer sees a gap in the dashboard.',
+        'Check-in status is tracked and visible to the organizer in real time.'
+      );
+      break;
+    case 'inventory':
+      scenarios.push(
+        'A manager reviews stock states and sees low-stock items highlighted.',
+        'An adjustment is recorded with a reason and timestamp.',
+        'A purchase plan is created for low-stock items and deferred items are noted.',
+        'Stock history shows who changed what and when.'
+      );
+      break;
+    default:
+      scenarios.push(
+        'The core workflow is tested end-to-end with realistic inputs.',
+        'A failure path is exercised and the system handles it gracefully.',
+        'Role boundaries are tested to confirm users see only what they should.'
+      );
+  }
+
+  if (riskFlags.includes('children')) {
+    scenarios.push('Child visibility is tested: a child user sees only allowed content and cannot access parent-only features.');
+  }
+  if (riskFlags.includes('medical')) {
+    scenarios.push('Privacy check: no sensitive clinical details appear in reminders or notifications.');
+  }
+  if (riskFlags.includes('legal') || riskFlags.includes('emergency')) {
+    scenarios.push('Boundary check: the product clearly states what it does NOT provide (legal advice, emergency dispatch, etc.).');
+  }
+  if (riskFlags.includes('money')) {
+    scenarios.push('Financial boundary check: the product does not present financial advice or investment guidance.');
+  }
+  if (riskFlags.includes('privacy') || riskFlags.includes('sensitive-data')) {
+    scenarios.push('Data minimization check: only necessary data is collected and visible roles are enforced.');
+  }
+
+  return scenarios;
+}
+
+function detectRiskFlags(input: ProjectInput): ProjectContext['riskFlags'] {
+  const source = [
+    input.productName,
+    input.productIdea,
+    input.targetAudience,
+    input.problemStatement,
+    input.constraints,
+    input.risks,
+    input.mustHaveFeatures,
+    input.dataAndIntegrations
+  ]
+    .join(' ')
+    .toLowerCase();
+
+  const flags: ProjectContext['riskFlags'] = [];
+  if (/(kid|kids|child|children|parent|family)/i.test(source)) flags.push('children');
+  // Medical flag: require at least 2 medical keywords or explicit healthcare context to avoid false positives
+  const medicalTerms = ['clinic', 'medical', 'patient', 'healthcare', 'physician', 'doctor', 'nurse', 'health record', 'diagnosis', 'treatment', 'medication', 'hipaa'];
+  const medicalMatches = medicalTerms.filter((term) => source.includes(term)).length;
+  if (medicalMatches >= 2 || /healthcare|medical|hipaa/.test(source)) flags.push('medical');
+  if (/(legal|law|compliance|attorney|vault)/i.test(source)) flags.push('legal');
+  if (/(emergency|urgent|disaster|readiness)/i.test(source)) flags.push('emergency');
+  if (/(privacy|permission|visibility|sensitive|confidential)/i.test(source)) flags.push('privacy');
+  if (/(budget|money|financial|finance|spend|payment)/i.test(source)) flags.push('money');
+  if (/(pii|sensitive data|personal data|protected data|reminder content)/i.test(source)) flags.push('sensitive-data');
+  return unique(flags);
+}
+
+function detectDomainArchetype(input: ProjectInput): ProjectContext['domainArchetype'] {
+  const source = [input.productName, input.productIdea, input.targetAudience, input.mustHaveFeatures, input.risks]
+    .join(' ')
+    .toLowerCase();
+
+  if (/(task board|chore|household task|family workspace)/i.test(source)) return 'family-task';
+  if (/(readiness|legal vault|emergency mode|family readiness|privvy)/i.test(source)) return 'family-readiness';
+  if (/(restaurant|ordering|pickup|kitchen|menu|order state)/i.test(source)) return 'restaurant-ordering';
+  if (/(budget|household budget|planner|spending)/i.test(source)) return 'budget-planner';
+  if (/(inventory|stock|threshold|adjustment|purchase)/i.test(source)) return 'inventory';
+  if (/(clinic|medical|patient|healthcare|physician|doctor|nurse|appointment)/i.test(source)) return 'clinic-scheduler';
+  if (/(hoa|maintenance|vendor|resident)/i.test(source)) return 'hoa-maintenance';
+  if (/(school club|student|club|advisor|event sign)/i.test(source)) return 'school-club';
+  if (/(volunteer|shift|check-in|no-show)/i.test(source)) return 'volunteer-manager';
+  if (/\b(sdr|crm|sales rep|sales team|sales pipeline|sales qualification|lead scoring|lead qualification|prospecting|quota)\b/i.test(source)) return 'sdr-sales';
+  return 'general';
+}
+
+function detectUiRelevance(input: ProjectInput, domainArchetype: ProjectContext['domainArchetype']) {
+  if (domainArchetype !== 'general') return true;
+
+  const source = [
+    input.productName,
+    input.productIdea,
+    input.targetAudience,
+    input.problemStatement,
+    input.desiredOutput,
+    input.mustHaveFeatures,
+    input.teamContext
+  ]
+    .join(' ')
+    .toLowerCase();
+
+  const structuralUiSignals = [
+    /\bscreen\b/,
+    /\bdashboard\b/,
+    /\bform\b/,
+    /\bwebsite\b/,
+    /\bweb app\b/,
+    /\bportal\b/,
+    /\badmin panel\b/,
+    /\blanding page\b/,
+    /\bmobile\b/,
+    /\bresponsive\b/,
+    /\binternal tool\b/,
+    /\bapp\b/
+  ];
+  const softUiSignals = [/\bui\b/, /\bux\b/, /\buser-facing\b/, /\bcustomer-facing\b/];
+  const nonUiSignals = [
+    /\bcli\b/,
+    /\bcommand line\b/,
+    /\bmarkdown package\b/,
+    /\bplaybook\b/,
+    /\bpolicy\b/,
+    /\bgenerator\b/,
+    /\btemplate\b/,
+    /\bartifact package\b/,
+    /\bno web app\b/,
+    /\bno dashboard\b/,
+    /\bno portal\b/,
+    /\bwithout a user-facing application\b/
+  ];
+  const structuralMatchCount = structuralUiSignals.filter((pattern) => pattern.test(source)).length;
+  const softMatchCount = softUiSignals.filter((pattern) => pattern.test(source)).length;
+  const nonUiMatchCount = nonUiSignals.filter((pattern) => pattern.test(source)).length;
+
+  if (structuralMatchCount === 0 && softMatchCount === 0) return false;
+  if (nonUiMatchCount >= 2 && structuralMatchCount === 0) return false;
+  return true;
+}
+
+function getDomainSignals(input: ProjectInput, riskFlags: ProjectContext['riskFlags']) {
+  const source = [
+    input.productName,
+    input.productIdea,
+    input.targetAudience,
+    input.problemStatement,
+    input.mustHaveFeatures,
+    input.constraints,
+    input.risks
+  ].join(' ');
+  const tokens = extractKeywords(input);
+  const extras = riskFlags.map((flag) => flag.replace('-', ' '));
+  return unique(tokens.concat(extras).concat(normalizeTokens(source).filter((token) => token.length >= 5))).slice(0, 18);
 }
 
 function extractKeywords(input: ProjectInput) {
@@ -190,6 +756,10 @@ function buildContext(input: ProjectInput): ProjectContext {
   const audienceSegments = splitItems(input.targetAudience);
   const answers = input.questionnaireAnswers;
   const keywords = extractKeywords(input);
+  const riskFlags = detectRiskFlags(input);
+  const domainArchetype = detectDomainArchetype(input);
+  const domainSignals = getDomainSignals(input, riskFlags);
+  const uiRelevant = detectUiRelevance(input, domainArchetype);
 
   const inferredAssumptions: string[] = [];
   if (!integrations.length) {
@@ -223,12 +793,1194 @@ function buildContext(input: ProjectInput): ProjectContext {
     workflowAnchor: truncateText(answers['primary-workflow'] || input.desiredOutput, 12),
     riskAnchor: truncateText(answers['operating-risks'] || input.risks, 12),
     acceptanceAnchor: truncateText(answers.acceptance || input.successMetrics, 12),
-    inferredAssumptions
+    inferredAssumptions,
+    domainArchetype,
+    domainSignals,
+    riskFlags,
+    uiRelevant
   };
 }
 
 function buildQuestionnaire(input: ProjectInput): QuestionnaireItem[] {
   return buildQuestionPrompts(getProfileConfig(input));
+}
+
+function containsAny(value: string, patterns: RegExp[]) {
+  return patterns.some((pattern) => pattern.test(value));
+}
+
+function titleCase(value: string) {
+  return value
+    .replace(/[-_/]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(' ');
+}
+
+function normalizeEntityName(value: string) {
+  return titleCase(value.replace(/\b(optional|local|file|notes?|preferences?)\b/gi, '').trim()) || 'Core Record';
+}
+
+function collectCoreEntities(input: ProjectInput, context: ProjectContext) {
+  const raw = context.integrations.length ? context.integrations : context.mustHaves;
+  return unique(raw.map(normalizeEntityName).filter(Boolean)).slice(0, 5);
+}
+
+function inferSensitivityLevel(context: ProjectContext) {
+  if (
+    context.riskFlags.includes('medical') ||
+    context.riskFlags.includes('legal') ||
+    context.riskFlags.includes('sensitive-data')
+  ) {
+    return 'High';
+  }
+  if (
+    context.riskFlags.includes('children') ||
+    context.riskFlags.includes('privacy') ||
+    context.riskFlags.includes('money')
+  ) {
+    return 'Medium';
+  }
+  return 'Low';
+}
+
+function inferExternalServices(input: ProjectInput, context: ProjectContext) {
+  const source = [
+    input.productIdea,
+    input.mustHaveFeatures,
+    input.dataAndIntegrations,
+    input.desiredOutput,
+    input.constraints,
+    ...Object.values(input.questionnaireAnswers)
+  ].join(' ');
+
+  const services: Array<{ name: string; purpose: string; required: boolean; trigger: string }> = [];
+  const addService = (name: string, purpose: string, trigger: string, required = true) => {
+    if (!services.some((service) => service.name === name)) {
+      services.push({ name, purpose, trigger, required });
+    }
+  };
+
+  if (/(stripe|payment|checkout|billing)/i.test(source)) addService('Payments provider', 'Handle charges, subscriptions, or checkout events.', 'When payment flow is approved.');
+  if (/(email|sendgrid|resend|mailgun|smtp)/i.test(source)) addService('Email service', 'Send notifications, confirmations, or reminders.', 'When outbound email is part of the workflow.');
+  if (/(oauth|google|microsoft|github|login|sso)/i.test(source)) addService('Identity provider', 'Handle delegated sign-in or account linking.', 'When external identity is explicitly required.');
+  if (/(webhook|callback|event source)/i.test(source)) addService('Webhook source', 'Deliver external event notifications into the app.', 'When outside systems push events.');
+  if (/(api|external service|integration|third-party|crm|calendar|slack)/i.test(source)) addService('External API', 'Read from or write to another product service.', 'When the workflow depends on outside data or actions.');
+  if (/(storage|upload|blob|s3|drive|dropbox)/i.test(source)) addService('File storage service', 'Store uploaded files or generated exports.', 'When files must live outside the local workspace.');
+  if (/(database|postgres|mysql|mongodb|redis)/i.test(source) && !/no database/i.test(input.nonGoals)) {
+    addService('Data store', 'Persist shared records outside local markdown artifacts.', 'Only if the MVP is explicitly allowed to move beyond local-first behavior.');
+  }
+
+  if (!services.length) {
+    addService(
+      'No live external service approved yet',
+      'Keep the MVP runnable with local files, local mocks, and markdown-first artifacts until a real dependency is approved.',
+      'Stay in this mode unless a later scope decision explicitly adds a service.',
+      false
+    );
+  }
+
+  return services.slice(0, 5);
+}
+
+function needsSecurityModule(input: ProjectInput, context: ProjectContext) {
+  const source = [
+    input.productName,
+    input.productIdea,
+    input.problemStatement,
+    input.mustHaveFeatures,
+    input.dataAndIntegrations,
+    input.risks,
+    input.targetAudience
+  ].join(' ');
+  return containsAny(source, [
+    /private|privacy|sensitive|permission|role|account|family|medical|health|financial|money|legal|student|child/i,
+    /records?|contacts?|documents?|scheduling|budget|resident|volunteer/i
+  ]);
+}
+
+function needsIntegrationModule(input: ProjectInput, context: ProjectContext) {
+  const services = inferExternalServices(input, context);
+  return services.some((service) => service.required && service.name !== 'No live external service approved yet');
+}
+
+function needsArchitectureModule(input: ProjectInput, context: ProjectContext) {
+  return (
+    input.track === 'technical' ||
+    context.mustHaves.length >= 4 ||
+    context.integrations.length >= 3 ||
+    context.audienceSegments.length >= 2 ||
+    context.riskFlags.length >= 2 ||
+    needsIntegrationModule(input, context)
+  );
+}
+
+function getFriendlyModuleEntries(input: ProjectInput, context: ProjectContext) {
+  return [
+    {
+      name: 'Product Goal and Scope',
+      folder: '/product-strategy/',
+      status: 'Required',
+      reason: 'Prevents the build from drifting away from the real MVP.'
+    },
+    {
+      name: 'What the App Must Do',
+      folder: '/requirements/',
+      status: 'Required',
+      reason: 'Turns the idea into build-ready requirements and acceptance checks.'
+    },
+    {
+      name: 'Private Data and Safety Check',
+      folder: '/security-risk/',
+      status: needsSecurityModule(input, context) ? 'Required' : 'Recommended',
+      reason: needsSecurityModule(input, context)
+        ? 'This project touches sensitive roles, private data, trust boundaries, or regulated-style risk.'
+        : 'Keep it ready so privacy, secret handling, and risky dependencies are not guessed later.'
+    },
+    {
+      name: 'External Services and Setup',
+      folder: '/integrations/',
+      status: needsIntegrationModule(input, context) ? 'Required' : 'Optional',
+      reason: needsIntegrationModule(input, context)
+        ? 'The workflow depends on outside services, APIs, credentials, or setup details.'
+        : 'The folder is generated now, but the MVP should stay runnable with local mocks unless scope changes.'
+    },
+    {
+      name: 'Technical Plan',
+      folder: '/architecture/',
+      status: needsArchitectureModule(input, context) ? 'Required' : 'Recommended',
+      reason: needsArchitectureModule(input, context)
+        ? 'This project has enough moving parts that architecture, state, and boundaries must be explicit.'
+        : 'A lightweight technical plan still helps the AI avoid accidental overengineering.'
+    },
+    {
+      name: 'Screen and Workflow Review',
+      folder: '/ui-ux/',
+      status: context.uiRelevant ? 'Required' : 'Recommended',
+      reason: context.uiRelevant
+        ? 'The project includes screens, forms, dashboards, or workflow states that need screenshot review.'
+        : 'Keep it on standby in case interface work appears later.'
+    },
+    {
+      name: 'Retest Previous Problems',
+      folder: '/regression-suite/',
+      status: 'Required',
+      reason: 'Protects earlier wins and stops regressions from sneaking through.'
+    },
+    {
+      name: 'Improve Until Good Enough Loop',
+      folder: '/recursive-test/',
+      status: 'Required',
+      reason: 'Pushes the package from barely working to evidence-backed quality after major build milestones.'
+    }
+  ] as const;
+}
+
+function getPhaseSupportModules(phase: PhasePlan, input: ProjectInput, context: ProjectContext) {
+  const source = `${phase.name} ${phase.goal} ${phase.focusSummary} ${phase.reviewChecklist.join(' ')} ${phase.scopeGuards.join(' ')}`.toLowerCase();
+  const modules: Array<{ folder: string; reason: string }> = [];
+  const addModule = (folder: string, reason: string) => {
+    if (!modules.some((module) => module.folder === folder)) modules.push({ folder, reason });
+  };
+
+  if (phase.phaseType === 'planning' || /(scope|brief|north star|value|rollout|handoff|mvp)/i.test(source)) {
+    addModule('/product-strategy/', 'This phase affects product goal, MVP scope, tradeoffs, or explicit non-goals.');
+    addModule('/requirements/', 'This phase depends on clear acceptance checks and explicit open questions.');
+  }
+
+  if (phase.phaseType === 'design' || /(workflow|state|requirement|acceptance|user flow|qualification|ordering|inventory|maintenance|schedule)/i.test(source)) {
+    addModule('/requirements/', 'This phase changes or clarifies the workflow, requirements, or acceptance criteria.');
+  }
+
+  if (
+    needsSecurityModule(input, context) &&
+    (/(privacy|permission|role|secret|sensitive|child|student|patient|safety|risk|visibility|authorization)/i.test(source) ||
+      context.riskFlags.length > 0 && phase.phaseType === 'verification')
+  ) {
+    addModule('/security-risk/', 'This phase touches private data, permissions, secret handling, or trust boundaries.');
+  }
+
+  if (
+    (needsIntegrationModule(input, context) || context.integrations.length > 0) &&
+    (/(integration|api|external|service|webhook|environment|delivery|notification|calendar|storage|payment|email)/i.test(source) ||
+      phase.phaseType === 'implementation')
+  ) {
+    addModule('/integrations/', 'This phase adds or relies on external services, environment setup, mocks, or failure handling.');
+  }
+
+  if (
+    needsArchitectureModule(input, context) &&
+    (/(architecture|state|data|entity|contract|repo|boundary|component|system|workflow)/i.test(source) ||
+      phase.phaseType === 'design' ||
+      phase.phaseType === 'implementation')
+  ) {
+    addModule('/architecture/', 'This phase changes system boundaries, state handling, data shape, or technical structure.');
+  }
+
+  return modules;
+}
+
+function renderSupportModuleLines(modules: Array<{ folder: string; reason: string }>, fallback: string) {
+  if (!modules.length) return `- ${fallback}`;
+  return modules.map((module) => `- ${module.folder} ${module.reason}`).join('\n');
+}
+
+function buildProductStrategyStartHere(input: ProjectInput, context: ProjectContext) {
+  return `# PRODUCT_STRATEGY_START_HERE
+
+## What this folder is for
+Use this folder to stop the build from solving the wrong problem. It gives the AI agent a clear product goal, a real MVP boundary, and a visible out-of-scope list.
+
+## Beginner shortcut
+- In the beginner journey, this folder supports Decide.
+- You usually do not need to open every file here.
+- Start with PRODUCT_NORTH_STAR.md, MVP_SCOPE.md, and PRODUCT_STRATEGY_GATE.md if product direction feels fuzzy.
+
+## What the AI agent should read first
+1. PRODUCT_NORTH_STAR.md
+2. TARGET_USERS.md
+3. MVP_SCOPE.md
+4. OUT_OF_SCOPE.md
+5. SUCCESS_METRICS.md
+6. PRODUCT_STRATEGY_GATE.md
+
+## Current product anchor
+- Product: ${input.productName}
+- Target user: ${context.primaryAudience}
+- Main problem: ${input.problemStatement}
+- Primary feature focus: ${context.primaryFeature}
+`;
+}
+
+function buildProductNorthStar(input: ProjectInput, context: ProjectContext) {
+  return `# PRODUCT_NORTH_STAR
+
+## Plain-English product goal
+${input.questionnaireAnswers['north-star'] || input.productIdea}
+
+## Target user
+${context.primaryAudience}
+
+## Main problem
+${input.problemStatement}
+
+## Desired outcome
+${input.desiredOutput}
+
+## What success looks like
+${listToBullets(
+  splitItems(input.successMetrics).concat([
+    `${context.primaryAudience} can follow the core workflow without hidden decisions.`,
+    `The AI stays inside the approved MVP instead of guessing new product scope.`
+  ]),
+  'Success means the product goal, audience, and MVP are explicit.'
+)}
+
+## What failure looks like
+${listToBullets(
+  context.risks.concat([
+    'The target user is still vague.',
+    'The phase plan contradicts the product goal or MVP scope.',
+    'The package quietly adds future features before the first release is proven.'
+  ]),
+  'Failure means the product direction is still unclear.'
+)}
+`;
+}
+
+function buildTargetUsers(input: ProjectInput, context: ProjectContext) {
+  const secondaryUsers = context.audienceSegments.slice(1);
+  return `# TARGET_USERS
+
+## Primary target user
+- ${context.primaryAudience}
+- Why they matter first: ${input.problemStatement}
+
+## Secondary users
+${listToBullets(
+  secondaryUsers.map((user) => `${user} influence adoption, review, or handoff quality.`),
+  'No secondary user was explicitly named yet. Add one if another role can block adoption or approval.'
+)}
+
+## Jobs to be done
+${listToBullets(
+  [
+    `Complete the main workflow: ${context.workflowAnchor}.`,
+    `Get the desired outcome: ${context.outputAnchor}.`,
+    `Avoid the main risk: ${context.riskAnchor}.`
+  ],
+  'Jobs to be done still need clarification.'
+)}
+
+## What would confuse or frustrate them
+${listToBullets(
+  context.risks.slice(0, 4).map((risk) => sentenceCase(risk)),
+  'Confusion points are not explicit yet.'
+)}
+`;
+}
+
+function buildMvpScope(input: ProjectInput, context: ProjectContext) {
+  return `# MVP_SCOPE
+
+## Must-have features
+${listToBullets(context.mustHaves, 'Must-have features still need confirmation.')}
+
+## Should-have features
+${listToBullets(context.niceToHaves.slice(0, 5), 'No should-have items are approved yet.')}
+
+## Later features
+${listToBullets(
+  context.niceToHaves.slice(5).concat([
+    'Anything that depends on a hosted UI, database, or auth.',
+    'Any workflow that cannot be proven with the current local-first MVP.'
+  ]),
+  'Later features should be recorded here before they are discussed in build phases.'
+)}
+
+## Explicit non-goals
+${listToBullets(
+  context.nonGoals.concat([
+    'Do not weaken gates, validation, recursive testing, local-first behavior, or markdown-first behavior.'
+  ]),
+  'Explicit non-goals must be recorded before the package is considered build-ready.'
+)}
+`;
+}
+
+function buildOutOfScope(input: ProjectInput, context: ProjectContext) {
+  const serviceNames = inferExternalServices(input, context)
+    .filter((service) => service.required && service.name !== 'No live external service approved yet')
+    .map((service) => service.name);
+  return `# OUT_OF_SCOPE
+
+## Features not to build yet
+${listToBullets(
+  context.nonGoals.concat(context.niceToHaves.slice(0, 4)),
+  'Record delayed features here so the AI does not treat them as implied requirements.'
+)}
+
+## Architecture not to add yet
+${listToBullets(
+  [
+    'No hosted UI.',
+    'No database.',
+    'No auth.',
+    'No microservices, event buses, or extra infrastructure unless the MVP proves they are necessary.'
+  ],
+  'Do not add architecture complexity that the MVP has not earned.'
+)}
+
+## Integrations not to add yet
+${listToBullets(
+  serviceNames.length
+    ? serviceNames.map((name) => `${name} is deferred until the product scope explicitly requires it.`)
+    : ['No live external services are approved yet beyond local mocks and local files.'],
+  'No integrations are approved yet.'
+)}
+
+## Reasons these items are out of scope
+${listToBullets(
+  [
+    'Keep the first release small enough to validate quickly.',
+    'Protect local-first and markdown-first behavior.',
+    'Reduce rework from speculative architecture or setup.',
+    'Keep beginner-facing guidance simple while the AI uses deeper folders as guardrails.'
+  ],
+  'Reasons must be stated explicitly so future builders do not guess.'
+)}
+`;
+}
+
+function buildSuccessMetrics(input: ProjectInput, context: ProjectContext) {
+  return `# SUCCESS_METRICS
+
+## Business success criteria
+${listToBullets(
+  splitItems(input.successMetrics).concat([
+    'The project remains inside the approved MVP and out-of-scope list.',
+    'The handoff is strong enough that a new builder can continue without hidden chat context.'
+  ]),
+  'Business success criteria need to be written in observable terms.'
+)}
+
+## User success criteria
+${listToBullets(
+  [
+    `${context.primaryAudience} can complete the core workflow without guessing what happens next.`,
+    'The product outcome is understandable in plain English.',
+    'Important trust or safety boundaries stay visible to the user.'
+  ],
+  'User success criteria still need clarification.'
+)}
+
+## Build success criteria
+${listToBullets(
+  [
+    'Generated phases, gates, and handoffs stay consistent with the product goal.',
+    'The AI does not add hidden scope, unapproved services, or unnecessary architecture.',
+    'All required support folders are generated and internally consistent.'
+  ],
+  'Build success criteria still need to be defined.'
+)}
+
+## Test success criteria
+${listToBullets(
+  [
+    'Deterministic validation passes.',
+    'Quality-regression checks pass.',
+    'Phase evidence, regression evidence, and recursive quality evidence all agree.'
+  ],
+  'Test success criteria still need clarification.'
+)}
+`;
+}
+
+function buildTradeoffLog(input: ProjectInput, context: ProjectContext) {
+  return `# TRADEOFF_LOG
+
+## Current tradeoffs
+- Keep the first release centered on ${context.primaryFeature} instead of adding optional extras too early.
+- Prefer local files, markdown artifacts, and mocks over hosted infrastructure.
+- Favor explicit safety, scope, and acceptance checks over faster but ambiguous build velocity.
+
+## Deferred tradeoffs to revisit later
+${listToBullets(
+  context.niceToHaves.slice(0, 4).map((item) => `Revisit ${item} only after the MVP proves the main workflow.`),
+  'Add later tradeoffs here when a real scope decision is made.'
+)}
+`;
+}
+
+function buildProductStrategyGate() {
+  return `# PRODUCT_STRATEGY_GATE
+
+## Entry criteria
+- Product brief exists.
+- Target audience is named.
+- Must-have scope and non-goals are recorded.
+
+## Required evidence
+- PRODUCT_NORTH_STAR.md completed.
+- MVP_SCOPE.md completed.
+- OUT_OF_SCOPE.md completed.
+- SUCCESS_METRICS.md completed.
+
+## Pass criteria
+- Product goal is plain English and consistent with the phase plan.
+- Target user is specific enough to guide the build.
+- MVP scope, later scope, and non-goals are all explicit.
+- Success criteria are visible and reviewable.
+
+## Revise criteria
+- Product goal is understandable but still too broad.
+- Scope categories exist but have contradictions or weak deferrals.
+- Success criteria need sharper wording or evidence.
+
+## Auto-fail conditions
+- Target user unclear.
+- MVP scope unclear.
+- No out-of-scope list.
+- Success criteria missing.
+- Product goal contradicts phase plan.
+`;
+}
+
+function buildRequirementsStartHere(input: ProjectInput, context: ProjectContext) {
+  return `# REQUIREMENTS_START_HERE
+
+## What this folder is for
+This folder turns the idea into build-ready requirements. It is the guardrail that keeps "sounds good" from becoming "no one knows what to build."
+
+## Beginner shortcut
+- In the beginner journey, this folder supports Decide.
+- Most business users only need the friendly summary in the main guide plus the copy-paste prompts.
+- Open this folder directly only when requirements, edge cases, or acceptance checks feel weak.
+
+## Read in this order
+1. FUNCTIONAL_REQUIREMENTS.md
+2. NON_FUNCTIONAL_REQUIREMENTS.md
+3. ACCEPTANCE_CRITERIA.md
+4. OPEN_QUESTIONS.md
+5. REQUIREMENTS_GATE.md
+`;
+}
+
+function buildFunctionalRequirements(input: ProjectInput, context: ProjectContext) {
+  const requirements = context.mustHaves.length ? context.mustHaves : [context.primaryFeature];
+  return `# FUNCTIONAL_REQUIREMENTS
+
+${requirements
+    .map(
+      (item, index) => `## Requirement ${index + 1}: ${sentenceCase(item)}
+
+- User story or business need: ${context.primaryAudience} needs this because ${input.problemStatement}
+- Expected behavior: The product supports ${item} in a way that matches ${context.workflowAnchor}.
+- Edge cases: ${context.risks[index] || 'Document what happens when the workflow is incomplete, invalid, or delayed.'}
+- Related phase: ${index === 0 ? 'Decide and Plan' : 'Plan, Design, and Build'}
+- Acceptance check: Evidence must show that ${item} is explicit, testable, and does not contradict scope.`
+    )
+    .join('\n\n')}
+`;
+}
+
+function buildNonFunctionalRequirements(input: ProjectInput, context: ProjectContext) {
+  return `# NON_FUNCTIONAL_REQUIREMENTS
+
+## Performance expectations
+- The core workflow should feel responsive enough for ${context.primaryAudience} to complete the main task without waiting on unnecessary infrastructure.
+
+## Reliability expectations
+- The package should remain usable with local files, deterministic validation, and phase-by-phase recovery.
+
+## Privacy expectations
+- Private data and visibility rules must be explicit before implementation.
+
+## Usability expectations
+- Beginner-facing guidance stays simple, step-by-step, and plain English.
+
+## Accessibility expectations
+- If the project has screens, forms, or dashboards, accessibility review remains part of Screen and Workflow Review.
+
+## Maintainability expectations
+- Markdown files remain the source of truth.
+- Architecture stays proportional to the MVP.
+- Future integrations or advanced infrastructure must be deferred until explicitly approved.
+`;
+}
+
+function buildAcceptanceCriteria(input: ProjectInput, context: ProjectContext) {
+  const requirements = context.mustHaves.length ? context.mustHaves : [context.primaryFeature];
+  return `# ACCEPTANCE_CRITERIA
+
+${requirements
+    .map(
+      (item, index) => `## ${index + 1}. ${sentenceCase(item)}
+
+- Clear pass/fail check: Pass only if ${item} is described concretely and stays inside the approved MVP.
+- Evidence required: Updated markdown artifacts, named files, and observed review or test results.
+- Test or manual verification method: Review the matching phase packet, run the related test script, and compare evidence to the requirement.
+- Related files: PROJECT_BRIEF.md, FUNCTIONAL_REQUIREMENTS.md, phases/phase-${String(Math.min(index + 1, 9)).padStart(2, '0')}/PHASE_BRIEF.md`
+    )
+    .join('\n\n')}
+`;
+}
+
+function buildOpenQuestions(input: ProjectInput, context: ProjectContext) {
+  const questions = [
+    context.answers['scope-cut'] ? '' : 'Which features stay in v1 if time is cut in half?',
+    context.answers.acceptance ? '' : 'What exact evidence should prove the package is ready to build?',
+    needsIntegrationModule(input, context) && !context.answers['data-boundaries']
+      ? 'Which external boundaries, APIs, or data handoffs must be explicit before coding?'
+      : '',
+    needsSecurityModule(input, context)
+      ? 'Which private-data, visibility, or permission decisions still need a human answer?'
+      : ''
+  ].filter(Boolean);
+
+  return `# OPEN_QUESTIONS
+
+${(questions.length ? questions : ['No blocking open questions were inferred at generation time. Keep this file updated when uncertainty appears.'])
+    .map(
+      (question, index) => `## Question ${index + 1}
+
+- Unresolved assumption: ${question}
+- Owner: Product owner or reviewer
+- Priority: ${index === 0 ? 'P0' : 'P1'}
+- Impact if unanswered: The AI may guess and build the wrong thing.
+- When it must be answered: Before the affected phase moves from Plan to Build.`
+    )
+    .join('\n\n')}
+`;
+}
+
+function buildRequirementsRiskReview(input: ProjectInput, context: ProjectContext) {
+  return `# REQUIREMENTS_RISK_REVIEW
+
+## Current requirement risks
+${listToBullets(
+  [
+    'Generic requirements that could apply to any project.',
+    'Acceptance criteria that cannot be tested with real evidence.',
+    'Open questions that silently block build work.',
+    'Requirements drifting away from the product goal and scope.'
+  ].concat(context.risks.slice(0, 3)),
+  'Requirement risks still need to be documented.'
+)}
+`;
+}
+
+function buildRequirementsGate() {
+  return `# REQUIREMENTS_GATE
+
+## Entry criteria
+- Product strategy exists.
+- Core workflow is named.
+- Must-have features are listed.
+
+## Required evidence
+- FUNCTIONAL_REQUIREMENTS.md completed.
+- NON_FUNCTIONAL_REQUIREMENTS.md completed.
+- ACCEPTANCE_CRITERIA.md completed.
+- OPEN_QUESTIONS.md reviewed.
+
+## Pass criteria
+- Core workflows have numbered requirements.
+- Acceptance criteria are testable.
+- Open questions are visible with owners and priorities.
+- Requirements do not contradict product strategy.
+
+## Revise criteria
+- Requirements exist but still rely on generic language.
+- Acceptance checks need sharper evidence rules.
+- Open questions are present but not prioritized clearly enough.
+
+## Auto-fail conditions
+- Core workflow lacks acceptance criteria.
+- Open P0 question blocks build.
+- Requirements are generic.
+- Acceptance criteria cannot be tested.
+- Requirements contradict product strategy.
+`;
+}
+
+function buildSecurityStartHere(input: ProjectInput, context: ProjectContext) {
+  return `# SECURITY_START_HERE
+
+## What this folder is for
+This folder keeps the build honest about private data, secrets, permissions, risky dependencies, and situations that need expert review.
+
+## Important note
+- This folder does not provide legal advice.
+- If risk stays high or unclear, flag it and request expert review instead of guessing.
+
+## Read in this order
+1. DATA_CLASSIFICATION.md
+2. SECRET_MANAGEMENT.md
+3. PRIVACY_RISK_REVIEW.md
+4. AUTHORIZATION_REVIEW.md
+5. SECURITY_GATE.md
+`;
+}
+
+function buildDataClassification(input: ProjectInput, context: ProjectContext) {
+  const entities = collectCoreEntities(input, context);
+  const sensitivity = inferSensitivityLevel(context);
+  return `# DATA_CLASSIFICATION
+
+${entities
+    .map(
+      (entity) => `## ${entity}
+
+- Data types handled: ${entity}, related notes, and workflow state.
+- Sensitivity level: ${sensitivity}
+- Where data is stored: Local markdown and JSON artifacts unless later scope explicitly approves something else.
+- Who can access it: ${context.audienceSegments.join(', ') || context.primaryAudience}
+- Retention notes: Keep only what is needed for the current workflow and review period.
+- Risk notes: ${context.risks[0] || 'Review visibility, minimization, and stale-data risk before implementation.'}`
+    )
+    .join('\n\n')}
+`;
+}
+
+function buildSecretManagement(input: ProjectInput, context: ProjectContext) {
+  const services = inferExternalServices(input, context).filter((service) => service.required && service.name !== 'No live external service approved yet');
+  return `# SECRET_MANAGEMENT
+
+## Expected secrets
+${listToBullets(
+  services.length
+    ? services.map((service) => `${service.name} credential or token, if and only if that service is approved for the MVP.`)
+    : ['No live secrets are expected for the current MVP. Use local mocks until a real service is approved.'],
+  'No secrets are expected yet.'
+)}
+
+## Where secrets should live
+- Local environment files that are gitignored.
+- OS-level secret storage or secure local tooling if available.
+
+## What must never be committed
+- API keys
+- Tokens
+- Passwords
+- Real customer or private-data exports
+
+## Local development handling
+- Use placeholder values and local mocks whenever possible.
+
+## Deployment handling if applicable
+- Only document deployment secret handling if a later approved phase adds a real external service.
+`;
+}
+
+function buildPrivacyRiskReview(input: ProjectInput, context: ProjectContext) {
+  const expertReview = needsSecurityModule(input, context)
+    ? 'Expert review is needed if legal, medical, child, financial, or other sensitive handling remains unclear.'
+    : 'Expert review is optional unless later scope introduces sensitive or regulated data.';
+  return `# PRIVACY_RISK_REVIEW
+
+## Private data risks
+${listToBullets(context.risks.slice(0, 4), 'No private-data risk was inferred yet, but this should still be reviewed.')}
+
+## User consent risks
+- Make sure the product does not imply data collection or sharing that the user never approved.
+
+## Data minimization notes
+- Collect only the data needed for the MVP workflow.
+- Keep sensitive detail out of screenshots, reminders, and exported examples when possible.
+
+## Deletion/export considerations
+- If users can add sensitive records later, plan how those records can be deleted or exported without guesswork.
+
+## When expert review is needed
+- ${expertReview}
+- This file is not legal advice.
+`;
+}
+
+function buildAuthorizationReview(input: ProjectInput, context: ProjectContext) {
+  const roles = context.audienceSegments.length ? context.audienceSegments : [context.primaryAudience];
+  return `# AUTHORIZATION_REVIEW
+
+## User roles
+${listToBullets(roles, 'Primary user role still needs confirmation.')}
+
+## Permissions
+${listToBullets(
+  roles.map((role, index) => `${role}: ${index === 0 ? 'full workflow visibility needed for their main task' : 'only the minimum visibility and actions needed for their role'}`),
+  'Permissions need to be defined before build work starts.'
+)}
+
+## Forbidden access patterns
+- A user can see or change data meant for a different role without an explicit reason.
+- The app stores more sensitive data than the workflow requires.
+- Secret values or credentials become visible in repo files or screenshots.
+
+## Role-based test cases
+${listToBullets(
+  [
+    `Confirm ${roles[0]} can complete the intended workflow.`,
+    `Confirm secondary roles cannot access restricted data or actions.`,
+    'Confirm stale or hidden records do not leak through exports, prompts, or screenshots.'
+  ],
+  'Role-based tests must be added before sign-off.'
+)}
+`;
+}
+
+function buildDependencyRiskChecklist() {
+  return `# DEPENDENCY_RISK_CHECKLIST
+
+## New dependency review
+- Explain why the dependency is needed for the MVP.
+
+## Package risk
+- Prefer mature, actively maintained packages with a narrow purpose.
+
+## Maintenance risk
+- Avoid dependencies that would be hard to replace or audit.
+
+## License awareness
+- Check that the license is compatible with the project.
+
+## Avoid unnecessary dependencies
+- Prefer built-in platform features or existing repo dependencies when they already solve the need.
+`;
+}
+
+function buildSecurityGate() {
+  return `# SECURITY_GATE
+
+## Entry criteria
+- Data types are listed.
+- Expected roles are listed.
+- Secret-handling expectations are written down.
+
+## Required evidence
+- DATA_CLASSIFICATION.md completed.
+- SECRET_MANAGEMENT.md completed.
+- PRIVACY_RISK_REVIEW.md completed.
+- AUTHORIZATION_REVIEW.md completed.
+
+## Pass criteria
+- Sensitive handling is proportionate to the project.
+- Secret storage rules are explicit.
+- Role and visibility boundaries are reviewable.
+- Risky dependencies are justified or deferred.
+
+## Revise criteria
+- Risk areas are identified but not actionable yet.
+- Role or retention notes need sharper wording.
+- A dependency or permission path still needs review.
+
+## Auto-fail conditions
+- Secrets committed to repo.
+- Private data stored without clear purpose.
+- Roles or permissions unclear.
+- Sensitive project has no privacy review.
+- Unnecessary risky dependency added.
+`;
+}
+
+function buildIntegrationStartHere(input: ProjectInput, context: ProjectContext) {
+  return `# INTEGRATION_START_HERE
+
+## What this folder is for
+This folder makes external services, keys, webhooks, mocks, and failure behavior explicit before coding depends on them.
+
+## Beginner shortcut
+- In the beginner journey, this folder supports Plan.
+- If the MVP is still local-only, the folder should clearly say that and define mocks instead of real services.
+
+## Read in this order
+1. EXTERNAL_SERVICES.md
+2. API_KEYS_AND_SECRETS.md
+3. ENVIRONMENT_VARIABLES.md
+4. MOCKING_STRATEGY.md
+5. INTEGRATION_TEST_PLAN.md
+6. INTEGRATION_GATE.md
+`;
+}
+
+function buildExternalServices(input: ProjectInput, context: ProjectContext) {
+  const services = inferExternalServices(input, context);
+  return `# EXTERNAL_SERVICES
+
+${services
+    .map(
+      (service) => `## ${service.name}
+
+- Purpose: ${service.purpose}
+- Required or optional: ${service.required ? 'Required only if this service is explicitly approved for the MVP.' : 'Optional and currently deferred.'}
+- When needed: ${service.trigger}
+- Local mock approach: Use local JSON, file-based stubs, and deterministic test fixtures before live credentials exist.
+- Failure behavior: The app should fail clearly, preserve local work, and avoid blocking the full package when the live service is unavailable.`
+    )
+    .join('\n\n')}
+`;
+}
+
+function buildApiKeysAndSecrets(input: ProjectInput, context: ProjectContext) {
+  const services = inferExternalServices(input, context);
+  return `# API_KEYS_AND_SECRETS
+
+${services
+    .map(
+      (service) => `## ${service.name}
+
+- Expected keys: ${service.name === 'No live external service approved yet' ? 'None approved yet.' : `${slugify(service.name).toUpperCase().replace(/-/g, '_')}_API_KEY or similar placeholder`}
+- Who provides them: Product owner or system owner for the approved service.
+- Where they are configured: Local environment file or secure local secret store.
+- Placeholder names: ${slugify(service.name).toUpperCase().replace(/-/g, '_')}_API_KEY
+- What not to commit: Real secrets, real customer exports, or copied dashboard screenshots with credentials.`
+    )
+    .join('\n\n')}
+`;
+}
+
+function buildEnvironmentVariables(input: ProjectInput, context: ProjectContext) {
+  const services = inferExternalServices(input, context);
+  const variableRows = services.map((service) => ({
+    name: `${slugify(service.name).toUpperCase().replace(/-/g, '_')}_API_KEY`,
+    purpose: service.purpose,
+    required: service.required && service.name !== 'No live external service approved yet'
+  }));
+  return `# ENVIRONMENT_VARIABLES
+
+${variableRows
+    .map(
+      (row) => `## ${row.name}
+
+- Variable name: ${row.name}
+- Purpose: ${row.purpose}
+- Required or optional: ${row.required ? 'Required when the approved live service is enabled.' : 'Optional placeholder only.'}
+- Example placeholder: ${row.required ? `${row.name}=replace_me_locally` : `${row.name}=not_used_in_v1`}
+- Local setup notes: Keep values in a gitignored local environment file and pair them with mocks for tests.`
+    )
+    .join('\n\n')}
+`;
+}
+
+function buildWebhooks(input: ProjectInput, context: ProjectContext) {
+  const hasWebhook = inferExternalServices(input, context).some((service) => /webhook/i.test(service.name));
+  return `# WEBHOOKS
+
+## Webhook source
+- ${hasWebhook ? 'Approved external webhook source should be named here before implementation starts.' : 'No webhook source is approved for the current MVP.'}
+
+## Event type
+- ${hasWebhook ? 'Record exact event names before coding.' : 'No event type is approved yet.'}
+
+## Endpoint purpose
+- ${hasWebhook ? 'Document what the webhook endpoint changes, validates, or triggers.' : 'No webhook endpoint should be built yet.'}
+
+## Retry/failure behavior
+- Webhook failures must be idempotent, observable, and safe to retry.
+
+## Local test notes
+- Use captured payload samples or local mock payload files before any live webhook is connected.
+`;
+}
+
+function buildIntegrationFailureModes() {
+  return `# FAILURE_MODES
+
+## Integration failure modes to plan for
+- Missing or invalid credentials
+- Timeout or service outage
+- Partial success that still needs local recovery
+- Rate limits or retry storms
+- Webhook retries arriving late or more than once
+`;
+}
+
+function buildMockingStrategy(input: ProjectInput, context: ProjectContext) {
+  return `# MOCKING_STRATEGY
+
+## What to mock before real credentials exist
+- All external API calls
+- Webhook payloads
+- Background notifications or delivery receipts
+
+## Mock data
+- Use project-specific sample records that match ${context.primaryFeature} and ${context.primaryAudience}.
+
+## Local test behavior
+- Local tests should pass without internet access, live credentials, or hidden setup steps.
+
+## When to replace mocks with real services
+- Only after Product Goal and Scope, What the App Must Do, and the related gate all explicitly approve the live dependency.
+`;
+}
+
+function buildIntegrationTestPlan(input: ProjectInput, context: ProjectContext) {
+  return `# INTEGRATION_TEST_PLAN
+
+## Local tests
+- Confirm the app still runs with local files and no live credentials when mocks are active.
+
+## Mocked tests
+- Exercise success, timeout, invalid-response, and partial-failure paths with deterministic fixtures.
+
+## Live integration checks if applicable
+- Only run after the service, keys, and environment variables are approved and documented.
+
+## Failure-mode tests
+- Prove the app fails clearly and safely when a dependency is missing, slow, or unavailable.
+`;
+}
+
+function buildIntegrationGate() {
+  return `# INTEGRATION_GATE
+
+## Entry criteria
+- External service expectations are written down.
+- Key and environment variable placeholders are documented.
+- A local mock path exists.
+
+## Required evidence
+- EXTERNAL_SERVICES.md completed.
+- API_KEYS_AND_SECRETS.md completed.
+- ENVIRONMENT_VARIABLES.md completed.
+- MOCKING_STRATEGY.md completed.
+- INTEGRATION_TEST_PLAN.md completed.
+
+## Pass criteria
+- Required services, setup, and failure behavior are explicit.
+- The MVP can still run locally when live services are unavailable.
+- Mock strategy is defined before live credentials are required.
+
+## Revise criteria
+- Service list exists but setup is still incomplete.
+- Mocks exist but do not yet cover failure modes.
+- Webhook behavior or environment setup needs clarification.
+
+## Auto-fail conditions
+- Required API key is unclear.
+- Environment variables undocumented.
+- App cannot run without unavailable external service.
+- No mock strategy.
+- Webhook failure behavior unclear.
+`;
+}
+
+function buildArchitectureStartHere(input: ProjectInput, context: ProjectContext) {
+  return `# ARCHITECTURE_START_HERE
+
+## What this folder is for
+This folder creates the minimum technical plan needed to build safely without overengineering the MVP.
+
+## Beginner shortcut
+- In the beginner journey, this folder supports Plan as Technical Plan.
+- The AI agent should use the detailed files here as guardrails.
+- Business users usually only need the summary in the step-by-step guide unless the build keeps guessing technical structure.
+
+## Read in this order
+1. SYSTEM_OVERVIEW.md
+2. DATA_MODEL.md
+3. API_CONTRACTS.md
+4. STATE_MANAGEMENT.md
+5. ARCHITECTURE_DECISIONS.md
+6. ARCHITECTURE_GATE.md
+`;
+}
+
+function buildSystemOverview(input: ProjectInput, context: ProjectContext) {
+  const services = inferExternalServices(input, context);
+  return `# SYSTEM_OVERVIEW
+
+## Simple architecture summary
+- Keep ${input.productName} as a local-first, markdown-first package that supports ${context.workflowAnchor}.
+
+## Main components
+${listToBullets(
+  [
+    'Guided root docs for the business user',
+    'Phase packets, gates, and handoffs for controlled delivery',
+    'Support folders for product strategy, requirements, security, integrations, architecture, UI/UX, and recursive testing'
+  ],
+  'Main components still need to be listed.'
+)}
+
+## Data flow
+- User input and questionnaire answers shape the package.
+- Support folders make assumptions explicit.
+- Phase work produces evidence, handoff notes, and validation results.
+
+## User flow
+- Decide -> Plan -> Design -> Build -> Test -> Handoff.
+
+## Integration points
+${listToBullets(
+  services.map((service) => `${service.name}: ${service.purpose}`),
+  'No live external integration points are approved yet.'
+)}
+
+## What is intentionally not included
+${listToBullets(
+  [
+    'No hosted UI.',
+    'No database.',
+    'No auth.',
+    'No speculative distributed architecture beyond what the MVP needs.'
+  ],
+  'Intentional exclusions must be visible here.'
+)}
+`;
+}
+
+function buildDataModel(input: ProjectInput, context: ProjectContext) {
+  const entities = collectCoreEntities(input, context);
+  return `# DATA_MODEL
+
+${entities
+    .map(
+      (entity, index) => `## ${entity}
+
+- Entities: ${entity}
+- Fields: id, name, status, notes, createdAt, updatedAt
+- Relationships: ${index === 0 ? 'Acts as a core record referenced by the rest of the workflow.' : `Links back to ${entities[0] || 'the main record'} when the workflow needs context.`}
+- Validation rules: Required fields cannot be blank, status must stay in an approved set, and markdown/json structure must remain consistent.
+- Sample records: { "id": "${slugify(entity)}-001", "name": "${entity} Sample", "status": "draft", "notes": "Replace with project-specific content." }
+- Risks: Missing validation, unclear ownership, or hidden state changes can break later phases.`
+    )
+    .join('\n\n')}
+`;
+}
+
+function buildApiContracts(input: ProjectInput, context: ProjectContext) {
+  return `# API_CONTRACTS
+
+## Local package boundaries
+- Endpoint or function boundary: package generation input -> generated markdown package
+- Inputs: brief fields, questionnaire answers, scope decisions, risk notes
+- Outputs: generated folders, phase packets, manifests, validation artifacts
+- Errors: missing required context, contradictory scope, invalid verification values, weak evidence
+- Authorization notes: keep role boundaries explicit if the project later introduces user roles or protected views
+- Test expectations: each boundary must be covered by smoke, validation, and quality-regression checks
+
+## Future live-service boundaries
+- Do not add live API contracts until the integration folder explicitly approves them.
+`;
+}
+
+function buildStateManagement(input: ProjectInput, context: ProjectContext) {
+  return `# STATE_MANAGEMENT
+
+## Client state
+- Current stage, current phase, prompt guidance, and user-visible progress notes.
+
+## Server state
+- Only the local package state and generated metadata that keep the workflow resumable.
+
+## Persisted state
+- repo/xelera-state.json plus markdown evidence and handoff files.
+
+## Loading/error states
+- Pending verification, blocked phase, missing evidence, failed validation, and revise-needed states must stay visible.
+
+## Reset behavior
+- If a phase fails, return to the current phase packet, update evidence, and do not silently advance.
+`;
+}
+
+function buildArchitectureDecisions(input: ProjectInput, context: ProjectContext) {
+  const today = new Date().toISOString().slice(0, 10);
+  return `# ARCHITECTURE_DECISIONS
+
+## Decision 1
+- Decision: Keep the architecture local-first and markdown-first.
+- Reason: Matches the product constraints and keeps beginner setup simple.
+- Alternatives considered: Hosted backend, database-backed workflow, SaaS dependency from day one.
+- Tradeoff: Less automation now in exchange for lower setup complexity and clearer guardrails.
+- Date: ${today}
+- Owner: Product owner and technical reviewer
+
+## Decision 2
+- Decision: Keep support folders explicit so the AI does not guess scope, safety, or architecture.
+- Reason: The package must remain understandable without hidden chat context.
+- Alternatives considered: Relying only on phase briefs or free-form prompts.
+- Tradeoff: More generated markdown, but less accidental drift.
+- Date: ${today}
+- Owner: Product owner and technical reviewer
+`;
+}
+
+function buildArchitectureGate() {
+  return `# ARCHITECTURE_GATE
+
+## Entry criteria
+- Product strategy and requirements exist.
+- Main components and data entities are named.
+- State and boundary assumptions are visible.
+
+## Required evidence
+- SYSTEM_OVERVIEW.md completed.
+- DATA_MODEL.md completed.
+- API_CONTRACTS.md completed.
+- STATE_MANAGEMENT.md completed.
+- ARCHITECTURE_DECISIONS.md completed.
+
+## Pass criteria
+- Technical plan is clear enough to build without hidden assumptions.
+- Architecture stays proportional to the MVP.
+- Data, state, and boundary decisions do not contradict scope.
+
+## Revise criteria
+- System plan exists but still hides key boundaries or risks.
+- State handling or validation rules need sharper wording.
+- Some technical decisions are still speculative.
+
+## Auto-fail conditions
+- Architecture is more complex than MVP requires.
+- Data model missing for data-heavy project.
+- Unclear API boundaries.
+- No state handling for core workflow.
+- Architecture contradicts product scope.
+`;
 }
 
 function normalizeIdPart(value: string) {
@@ -618,210 +2370,383 @@ function buildCritique(input: ProjectInput, questionnaire: QuestionnaireItem[], 
   return critique;
 }
 
-function buildPhaseBlueprints(input: ProjectInput, context: ProjectContext, critique: CritiqueItem[]): PhaseBlueprint[] {
-  const common: PhaseBlueprint[] = [
-    {
-      tag: 'brief',
-      name: `${input.productName} brief and planning guardrails`,
-      rationale: `Lock the problem, audience, constraints, and output expectations for ${input.productName} before build work starts.`,
-      primaryInputs: [input.productIdea, input.problemStatement, input.desiredOutput],
-      confirmationPrompts: ['Is the brief specific enough to survive without chat history?']
-    },
-    {
-      tag: 'audience',
-      name: `${context.primaryAudience} user, customer, and stakeholder map`,
-      rationale: `Clarify who ${input.productName} serves first and who else influences approval or rollout.`,
-      primaryInputs: [input.targetAudience, context.answers['user-segments'] || '', context.answers['stakeholder-workflow'] || ''],
-      confirmationPrompts: ['Which audience matters first, and which stakeholders only review or approve?']
-    },
-    {
-      tag: 'workflow',
-      name: `${input.productName} workflow and failure-path plan`,
-      rationale: `Map the core path, support path, and failure path for ${context.primaryAudience}.`,
-      primaryInputs: [context.answers['primary-workflow'] || input.desiredOutput, context.answers['failure-modes'] || context.answers['customer-pain'] || ''],
-      confirmationPrompts: ['Where does the workflow fail, stall, or create support load?']
-    },
-    {
-      tag: 'scope',
-      name: `MVP scope and non-goals for ${context.primaryFeature}`,
-      rationale: `Protect the first release by separating ${context.primaryFeature} from later ideas and optional extras.`,
-      primaryInputs: [input.mustHaveFeatures, input.nonGoals, context.answers['scope-cut'] || ''],
-      confirmationPrompts: ['If time shrinks, what stays in v1 and what moves out?']
-    }
+function createBlueprint(
+  tag: PhaseBlueprint['tag'],
+  name: string,
+  rationale: string,
+  primaryInputs: string[],
+  confirmationPrompts: string[],
+  phaseType: PhasePlan['phaseType'],
+  outputs: string[] = [],
+  repoTargets: string[] = []
+): PhaseBlueprint {
+  return { tag, name, rationale, primaryInputs, confirmationPrompts, phaseType, outputs, repoTargets };
+}
+
+function getRiskTriggeredBlueprints(input: ProjectInput, context: ProjectContext): PhaseBlueprint[] {
+  const blueprints: PhaseBlueprint[] = [];
+
+  if (
+    context.riskFlags.includes('children') &&
+    (context.domainArchetype === 'family-task' ||
+      context.domainArchetype === 'family-readiness' ||
+      context.domainArchetype === 'school-club' ||
+      /(kid|kids|child|children|parent|family|student|school|minor)/i.test(
+        `${input.productName} ${input.productIdea}`
+      ))
+  ) {
+    blueprints.push(
+      createBlueprint(
+        'permissions',
+        `${input.productName} child visibility and parent control rules`,
+        `Lock the child-visible actions, parent approval boundaries, and shared household access rules before later phases can over-assume permissions.`,
+        [input.constraints, input.risks, context.answers['data-boundaries'] || '', input.mustHaveFeatures],
+        ['Can a child user see only allowed tasks and actions, and are parent control boundaries explicit?'],
+        'design',
+        ['Child-visible rules list', 'Parent and co-parent control boundary notes'],
+        ['Role matrix in markdown', 'Visibility notes in phase artifacts']
+      )
+    );
+  }
+
+  if (
+    context.riskFlags.includes('medical') &&
+    (context.domainArchetype === 'clinic-scheduler' ||
+      /(clinic|medical|patient|healthcare|physician|doctor|nurse)/i.test(
+        `${input.productName} ${input.productIdea}`
+      ))
+  ) {
+    blueprints.push(
+      createBlueprint(
+        'scheduling',
+        `${input.productName} provider availability, reminder, and privacy checks`,
+        `Make provider scheduling conflicts, reminder wording, and privacy-sensitive content reviewable before implementation work claims the flow is safe.`,
+        [input.risks, input.constraints, context.answers['operating-risks'] || '', context.answers['primary-workflow'] || ''],
+        ['What reminder content must stay non-sensitive, and which scheduling conflicts are handled now versus deferred?'],
+        'design',
+        ['Provider availability rules', 'Reminder privacy boundary notes'],
+        ['Scheduling rule notes', 'Reminder content checklist']
+      )
+    );
+  }
+
+  if (context.riskFlags.includes('legal') || context.riskFlags.includes('emergency')) {
+    blueprints.push(
+      createBlueprint(
+        'emergency',
+        `${input.productName} emergency claims and legal boundary review`,
+        `Convert legal, emergency, and trust boundaries into explicit do-not-overclaim rules before the handoff sounds more authoritative than the product really is.`,
+        [input.risks, input.constraints, context.answers.acceptance || '', context.answers['operating-risks'] || ''],
+        ['Does the package clearly say what emergency or legal help the product does not provide?'],
+        'verification',
+        ['Boundary disclaimers', 'Deferred legal or emergency decisions'],
+        ['Boundary language in brief and gates']
+      )
+    );
+  }
+
+  if (context.riskFlags.includes('money')) {
+    const isBudgetDomain = context.domainArchetype === 'budget-planner';
+    blueprints.push(
+      createBlueprint(
+        'budgeting',
+        isBudgetDomain
+          ? `${input.productName} budgeting assumptions and non-advice boundaries`
+          : `${input.productName} cost boundaries and spending review limits`,
+        isBudgetDomain
+          ? `Make the collaboration, spending review, and non-advice boundary explicit so the plan does not drift into financial-advice claims.`
+          : `Make cost boundaries, spending review limits, and purchase decision rules explicit so the plan does not overclaim financial authority.`,
+        [input.risks, input.constraints, context.answers.acceptance || '', input.mustHaveFeatures],
+        isBudgetDomain
+          ? ['Where must the product stop at budgeting support and avoid presenting financial advice?']
+          : ['Where must the product stop at cost tracking and avoid presenting financial advice or purchase authority?'],
+        'design',
+        isBudgetDomain
+          ? ['Budget review boundary notes', 'Shared decision review rules']
+          : ['Cost boundary notes', 'Purchase decision review rules'],
+        isBudgetDomain ? ['Budgeting policy notes'] : ['Cost and spending policy notes']
+      )
+    );
+  }
+
+  if (context.riskFlags.includes('privacy') || context.riskFlags.includes('sensitive-data')) {
+    blueprints.push(
+      createBlueprint(
+        'security',
+        `${input.productName} privacy, visibility, and data minimization checks`,
+        `Require the plan to prove what data is visible to which role, what must stay hidden, and what should be minimized or deferred.`,
+        [input.constraints, input.risks, input.dataAndIntegrations, context.answers['data-boundaries'] || ''],
+        ['Which visibility, disclaimer, or data minimization rules must be proven before implementation?'],
+        'verification',
+        ['Visibility rule checklist', 'Data minimization notes'],
+        ['Role or data boundary notes']
+      )
+    );
+  }
+
+  return blueprints;
+}
+
+function getDomainBlueprints(input: ProjectInput, context: ProjectContext): PhaseBlueprint[] {
+  switch (context.domainArchetype) {
+    case 'family-task':
+      return [
+        createBlueprint('brief', `${input.productName} family workflow brief and scope cut`, `Lock the household task workflow, v1 scope cut, and child-safe constraints before deeper planning starts.`, [input.productIdea, input.problemStatement, context.answers['scope-cut'] || ''], ['Is the family workflow specific enough to survive without chat context?'], 'planning', ['Scope cut notes', 'Primary family workflow summary']),
+        createBlueprint('permissions', `${input.productName} role and child visibility matrix`, `Define exactly what parents, co-parents, caregivers, and child users can see, change, approve, or never access.`, [input.targetAudience, context.answers['data-boundaries'] || '', input.constraints], ['Can each role be explained in one sentence without ambiguity?'], 'design', ['Role matrix', 'Child visibility rules']),
+        createBlueprint('workflow', `${input.productName} task lifecycle and approval flow`, `Map task creation, assignment, completion, parent review, and reminder edge cases so the family task flow is operational instead of aspirational.`, [context.answers['primary-workflow'] || '', context.answers['failure-modes'] || '', input.mustHaveFeatures], ['Where can the task lifecycle confuse a child or create extra parent work?'], 'design', ['Task state flow', 'Reminder deferrals and edge cases']),
+        createBlueprint('testing', `${input.productName} mobile, reminder, and privacy proof plan`, `Turn the hard parts of the family task experience into concrete review scenarios with mobile and privacy checks.`, [input.risks, context.answers['test-proof'] || '', input.successMetrics], ['What evidence proves the mobile child flow and privacy rules actually make sense?'], 'verification', ['Scenario-based proof list'])
+      ];
+    case 'family-readiness':
+      return [
+        createBlueprint('brief', `${input.productName} readiness brief and family emergency scope`, `Define what the readiness product does, what it never promises, and which family decisions must stay explicit.`, [input.productIdea, input.constraints, input.risks], ['Is the readiness scope clear about what is planning support versus urgent real-world action?'], 'planning', ['Scope statement', 'Boundary notes']),
+        createBlueprint('emergency', `${input.productName} emergency mode trust boundaries`, `Document what emergency mode can surface, what it cannot decide, and how the package avoids overclaiming legal or operational authority.`, [input.risks, input.constraints, context.answers.acceptance || ''], ['Which emergency claims would become unsafe if left vague?'], 'verification', ['Emergency boundary checklist', 'Explicit do-not-claim list']),
+        createBlueprint('workflow', `${input.productName} family readiness workflow and escalation paths`, `Clarify the path from preparation to emergency use, including blockers, outdated information, and handoff responsibilities.`, [context.answers['primary-workflow'] || '', context.answers['operating-risks'] || '', input.teamContext], ['What happens when a family member finds missing or outdated readiness information?'], 'design', ['Escalation flow', 'Ownership notes']),
+        createBlueprint('handoff', `${input.productName} family recap and release caveats`, `Package the readiness rules, disclaimers, and caveats so the final handoff does not look like a generic planning packet.`, [input.desiredOutput, input.successMetrics, input.teamContext], ['What caveats must stay visible in the final release recap?'], 'finalization', ['Release caveats', 'Final family recap'])
+      ];
+    case 'sdr-sales':
+      return [
+        createBlueprint('brief', `${input.productName} sales qualification brief`, `Lock the lead qualification problem, buyer handoff expectations, and v1 operating scope before the plan expands.`, [input.productIdea, input.problemStatement, input.mustHaveFeatures], ['Is the qualification target specific enough to prevent generic CRM planning?'], 'planning', ['Qualification problem summary']),
+        createBlueprint('qualification', `${input.productName} qualification signals and rep handoff rules`, `Define which signals count as qualified, which rep actions are required, and what must be handed to the next sales owner.`, [context.answers['primary-workflow'] || '', input.successMetrics, input.teamContext], ['What exact information must move from qualification to the next sales rep?'], 'design', ['Qualification criteria', 'Rep handoff checklist']),
+        createBlueprint('operations', `${input.productName} objection, follow-up, and blocked-lead review`, `Convert sales edge cases into reviewable follow-up rules instead of generic business-value filler.`, [input.risks, context.answers['operating-risks'] || '', context.answers['adoption-risks'] || ''], ['Which lead states or objections must block automated progression?'], 'verification', ['Blocked lead scenarios', 'Follow-up rules'])
+      ];
+    case 'restaurant-ordering':
+      return [
+        createBlueprint('brief', `${input.productName} pickup ordering scope and service boundaries`, `Lock the first-release order types, service boundaries, and kitchen assumptions before later phases add unsupported fulfillment modes.`, [input.constraints, input.mustHaveFeatures, input.nonGoals], ['Is pickup-first scope explicit, including what is deferred?'], 'planning', ['Service boundary summary']),
+        createBlueprint('ordering', `${input.productName} order states, kitchen handoff, and customer updates`, `Define how an order moves from creation to kitchen acknowledgment, ready state, pickup, or failure handling.`, [context.answers['primary-workflow'] || '', input.mustHaveFeatures, input.risks], ['Which order state transitions would confuse staff or customers if left vague?'], 'design', ['Order state map', 'Kitchen handoff notes']),
+        createBlueprint('testing', `${input.productName} order failure, pickup, and continuity checks`, `Turn menu, kitchen, and pickup failure handling into concrete review scenarios with evidence expectations.`, [input.risks, input.successMetrics, context.answers['failure-modes'] || ''], ['What evidence proves the kitchen workflow works when something goes wrong?'], 'verification', ['Pickup and failure scenarios'])
+      ];
+    case 'budget-planner':
+      return [
+        createBlueprint('brief', `${input.productName} household budgeting scope and collaboration brief`, `Lock the budgeting use case, shared review flow, and non-advice guardrails before implementation assumptions appear.`, [input.productIdea, input.constraints, input.risks], ['Is the product framed as planning support rather than financial advice?'], 'planning', ['Budgeting scope summary']),
+        createBlueprint('budgeting', `${input.productName} budget categories, review cadence, and collaboration rules`, `Define who reviews spending, how adjustments are proposed, and which budgeting states matter in v1.`, [context.answers['primary-workflow'] || '', input.mustHaveFeatures, input.targetAudience], ['Which household collaboration decisions must be visible before coding starts?'], 'design', ['Budget review flow', 'Adjustment rules']),
+        createBlueprint('testing', `${input.productName} non-advice, visibility, and review evidence`, `Require explicit proof that the package stays inside budgeting support and documents what counts as a failed or misleading planning flow.`, [input.risks, input.successMetrics, context.answers.acceptance || ''], ['What evidence proves the plan avoids overclaiming advice?'], 'verification', ['Non-advice review scenarios'])
+      ];
+    case 'clinic-scheduler':
+      return [
+        createBlueprint('brief', `${input.productName} clinic scheduling brief and privacy boundaries`, `Lock the first-release scheduling scope, staff roles, and patient-visible boundaries before implementation detail creates unsafe assumptions.`, [input.productIdea, input.constraints, input.risks], ['Is the scheduler scope clear about staff actions, patient impact, and privacy limits?'], 'planning', ['Scheduling scope summary']),
+        createBlueprint('scheduling', `${input.productName} provider availability and conflict rules`, `Define provider availability, booking conflicts, reminder boundaries, and explicit deferrals for anything the first release cannot safely handle.`, [context.answers['primary-workflow'] || '', context.answers['operating-risks'] || '', input.mustHaveFeatures], ['Which scheduling conflicts are handled now, and which are explicitly deferred?'], 'design', ['Conflict rules', 'Reminder constraints']),
+        createBlueprint('security', `${input.productName} reminder wording and sensitive-data minimization`, `Turn privacy and reminder risk into explicit do-not-send and do-not-store rules that reviewers can check.`, [input.risks, input.constraints, input.dataAndIntegrations], ['What reminder content must never contain sensitive clinic details?'], 'verification', ['Reminder wording rules', 'Sensitive-data checklist'])
+      ];
+    case 'hoa-maintenance':
+      return [
+        createBlueprint('brief', `${input.productName} maintenance request scope and resident expectations`, `Lock the resident, board, and vendor workflow so the package focuses on maintenance operations instead of generic portal planning.`, [input.productIdea, input.problemStatement, input.mustHaveFeatures], ['Are request intake and status update expectations concrete enough?'], 'planning', ['Request scope summary']),
+        createBlueprint('maintenance', `${input.productName} request triage, vendor, and status-update flow`, `Define request states, vendor involvement, and resident status updates so the workflow is operational and auditable.`, [context.answers['primary-workflow'] || '', input.risks, input.dataAndIntegrations], ['Where can a maintenance request stall without the resident understanding what happened?'], 'design', ['Request state flow', 'Vendor handoff notes']),
+        createBlueprint('testing', `${input.productName} backlog, handoff, and continuity checks`, `Require evidence that request ownership, status updates, and deferred cases remain explicit across phases.`, [context.answers['test-proof'] || '', input.successMetrics, context.answers['operating-risks'] || ''], ['What evidence proves the request status flow still makes sense after triage?'], 'verification', ['Triage and status scenarios'])
+      ];
+    case 'school-club':
+      return [
+        createBlueprint('brief', `${input.productName} student role and event scope brief`, `Lock the club roles, event scope, and student privacy boundaries before the package drifts into generic school admin work.`, [input.productIdea, input.targetAudience, input.constraints], ['Are student, advisor, and organizer roles explicit enough?'], 'planning', ['Student role summary']),
+        createBlueprint('events', `${input.productName} student roles, event sign-up, and privacy rules`, `Define who can create events, who can sign up, and what student information should or should not be visible.`, [context.answers['primary-workflow'] || '', input.risks, input.mustHaveFeatures], ['Which student data or event actions need extra visibility limits?'], 'design', ['Event sign-up rules', 'Visibility limits']),
+        createBlueprint('testing', `${input.productName} advisor review and student visibility proof`, `Turn student-role and privacy concerns into concrete review scenarios instead of generic acceptance bullets.`, [input.successMetrics, input.risks, context.answers.acceptance || ''], ['What evidence proves the student-facing flow stays within allowed boundaries?'], 'verification', ['Student privacy scenarios'])
+      ];
+    case 'volunteer-manager':
+      return [
+        createBlueprint('brief', `${input.productName} volunteer ops brief and first-release scope`, `Lock the volunteer coordination problem, shift ownership, and day-of operations scope before generic admin phases crowd it out.`, [input.productIdea, input.problemStatement, input.nonGoals], ['Is the volunteer operations problem stated in day-of terms instead of generic coordination terms?'], 'planning', ['Volunteer ops scope']),
+        createBlueprint('events', `${input.productName} shift coverage, no-show, and check-in flow`, `Define shift states, organizer intervention points, no-show handling, and day-of check-in expectations.`, [context.answers['primary-workflow'] || '', input.risks, input.mustHaveFeatures], ['What happens when a volunteer cannot make a shift or fails to check in?'], 'design', ['Shift state map', 'No-show response notes']),
+        createBlueprint('testing', `${input.productName} organizer dashboard and continuity checks`, `Require scenario-based proof that organizers can see gaps, handle no-shows, and preserve the event plan without guessing.`, [input.successMetrics, context.answers['failure-modes'] || '', context.answers['operating-risks'] || ''], ['What evidence proves organizers can recover from missing volunteers?'], 'verification', ['Gap and no-show scenarios'])
+      ];
+    case 'inventory':
+      return [
+        createBlueprint('brief', `${input.productName} inventory scope and stock-state brief`, `Lock the first-release stock tracking scope, excluded edge cases, and basic inventory terminology before later phases drift.`, [input.productIdea, input.mustHaveFeatures, input.nonGoals], ['Is the inventory problem stated in stock-state terms rather than generic dashboard language?'], 'planning', ['Inventory scope summary']),
+        createBlueprint('inventory', `${input.productName} stock states, thresholds, and adjustment rules`, `Define item states, low-stock thresholds, adjustments, and purchase planning boundaries so inventory behavior is reviewable.`, [context.answers['primary-workflow'] || '', input.risks, input.dataAndIntegrations], ['Which inventory transitions or adjustments would create trust problems if they stayed vague?'], 'design', ['Stock state rules', 'Threshold and adjustment notes']),
+        createBlueprint('testing', `${input.productName} low-stock, continuity, and deferred-scope checks`, `Turn inventory edge cases and deferrals into concrete review scenarios with real evidence expectations.`, [input.successMetrics, input.risks, context.answers['test-proof'] || ''], ['What evidence proves low-stock and adjustment flows are handled or explicitly deferred?'], 'verification', ['Low-stock and adjustment scenarios'])
+      ];
+    default:
+      return [
+        createBlueprint('brief', `${input.productName} brief and planning guardrails`, `Lock the problem, audience, constraints, and output expectations for ${input.productName} before build work starts.`, [input.productIdea, input.problemStatement, input.desiredOutput], ['Is the brief specific enough to survive without chat history?'], 'planning', ['Updated brief summary']),
+        createBlueprint('audience', `${context.primaryAudience} user, customer, and stakeholder map`, `Clarify who ${input.productName} serves first and who else influences approval or rollout.`, [input.targetAudience, context.answers['user-segments'] || '', context.answers['stakeholder-workflow'] || ''], ['Which audience matters first, and which stakeholders only review or approve?'], 'planning', ['Audience priority notes']),
+        createBlueprint('workflow', `${input.productName} workflow and failure-path plan`, `Map the core path, support path, and failure path for ${context.primaryAudience}.`, [context.answers['primary-workflow'] || input.desiredOutput, context.answers['failure-modes'] || context.answers['customer-pain'] || ''], ['Where does the workflow fail, stall, or create support load?'], 'design', ['Workflow and failure-path notes']),
+        createBlueprint('scope', `MVP scope and non-goals for ${context.primaryFeature}`, `Protect the first release by separating ${context.primaryFeature} from later ideas and optional extras.`, [input.mustHaveFeatures, input.nonGoals, context.answers['scope-cut'] || ''], ['If time shrinks, what stays in v1 and what moves out?'], 'planning', ['Scope cut and deferral list'])
+      ];
+  }
+}
+
+function getTrackBlueprints(input: ProjectInput, context: ProjectContext): PhaseBlueprint[] {
+  if (input.track === 'business') {
+    return [
+      createBlueprint('business-value', `Business value proof for ${input.productName}`, `Make the user value, business value, and success metrics explicit for ${input.productName}.`, [input.successMetrics, context.answers['business-proof'] || context.answers.acceptance || '', context.answers.monetization || ''], ['What business proof should exist before this handoff is called build-ready?'], 'planning', ['Business value proof notes']),
+      createBlueprint('stakeholders', `Stakeholder and adoption gates for ${context.primaryAudience}`, `Document how stakeholders, reviewers, and adopters influence scope, launch, or acceptance.`, [context.answers['stakeholder-workflow'] || '', context.answers['adoption-risks'] || '', input.teamContext], ['Who can block adoption even if the implementation works?'], 'design', ['Stakeholder approval path']),
+      createBlueprint('operations', `Operational guardrails and rollout risks for ${input.productName}`, `Turn trust, support, and rollout risks into explicit business-side gates.`, [input.risks, context.answers['operating-risks'] || '', input.constraints], ['Which operating risk should stop launch readiness?'], 'verification', ['Rollout risk checks'])
+    ];
+  }
+
+  return [
+    createBlueprint('data', `Data boundaries and integrations for ${context.primaryFeature}`, `Define the data, files, and interfaces that ${input.productName} must create, store, or exchange.`, [input.dataAndIntegrations, context.answers['data-boundaries'] || '', input.constraints], ['Which entities, inputs, outputs, or APIs must be explicit before coding?'], 'design', ['Data boundary notes']),
+    createBlueprint('architecture', `Architecture and repo structure for ${input.productName}`, `Translate the current plan into implementation structure, ownership, and repo-level boundaries.`, [context.answers['repo-shape'] || '', input.teamContext, input.mustHaveFeatures], ['What repo, file, or module structure should the next builder expect?'], 'implementation', ['Repo map assumptions'], ['src/features/', 'src/lib/', 'tests/']),
+    createBlueprint('testing', `Testing and review gates for ${context.primaryFeature}`, `Make testability, review evidence, and regression risk explicit before build handoff.`, [context.answers['test-proof'] || context.answers.acceptance || '', input.successMetrics, context.answers['failure-modes'] || ''], ['What should be tested or reviewed first before trusting the implementation?'], 'verification', ['Verification scenarios'])
   ];
+}
 
-  const trackSpecific: PhaseBlueprint[] =
-    input.track === 'business'
+function getLevelBlueprints(input: ProjectInput, context: ProjectContext): PhaseBlueprint[] {
+  if (input.level === 'beginner') {
+    return [
+      createBlueprint(
+        input.track === 'business' ? 'testing' : 'deployment',
+        input.track === 'business'
+          ? `Simple acceptance and review checklist for ${input.productName}`
+          : `Build order and release checklist for ${input.productName}`,
+        input.track === 'business'
+          ? `Create an approachable proof checklist so a non-technical reviewer can decide whether the package is ready.`
+          : `Create a beginner-friendly repo, testing, and release order for the next technical builder.`,
+        [input.successMetrics, context.answers.acceptance || '', input.timeline, context.answers['deployment-guardrails'] || ''],
+        [input.track === 'business' ? 'Could a non-technical reviewer understand what success looks like?' : 'What should the next technical builder do first, second, and third?'],
+        'verification',
+        ['Beginner-friendly proof checklist']
+      )
+    ];
+  }
+
+  if (input.level === 'intermediate') {
+    return input.track === 'technical'
       ? [
-          {
-            tag: 'business-value',
-            name: `Business value proof for ${input.productName}`,
-            rationale: `Make the user value, business value, and success metrics explicit for ${input.productName}.`,
-            primaryInputs: [input.successMetrics, context.answers['business-proof'] || context.answers.acceptance || '', context.answers.monetization || ''],
-            confirmationPrompts: ['What business proof should exist before this handoff is called build-ready?']
-          },
-          {
-            tag: 'stakeholders',
-            name: `Stakeholder and adoption gates for ${context.primaryAudience}`,
-            rationale: `Document how stakeholders, reviewers, and adopters influence scope, launch, or acceptance.`,
-            primaryInputs: [context.answers['stakeholder-workflow'] || '', context.answers['adoption-risks'] || '', input.teamContext],
-            confirmationPrompts: ['Who can block adoption even if the implementation works?']
-          },
-          {
-            tag: 'operations',
-            name: `Operational guardrails and rollout risks for ${input.productName}`,
-            rationale: `Turn trust, support, and rollout risks into explicit business-side gates.`,
-            primaryInputs: [input.risks, context.answers['operating-risks'] || '', input.constraints],
-            confirmationPrompts: ['Which operating risk should stop launch readiness?']
-          }
-        ]
-      : [
-          {
-            tag: 'data',
-            name: `Data boundaries and integrations for ${context.primaryFeature}`,
-            rationale: `Define the data, files, and interfaces that ${input.productName} must create, store, or exchange.`,
-            primaryInputs: [input.dataAndIntegrations, context.answers['data-boundaries'] || '', input.constraints],
-            confirmationPrompts: ['Which entities, inputs, outputs, or APIs must be explicit before coding?']
-          },
-          {
-            tag: 'architecture',
-            name: `Architecture and repo structure for ${input.productName}`,
-            rationale: `Translate the current plan into implementation structure, ownership, and repo-level boundaries.`,
-            primaryInputs: [context.answers['repo-shape'] || '', input.teamContext, input.mustHaveFeatures],
-            confirmationPrompts: ['What repo, file, or module structure should the next builder expect?']
-          },
-          {
-            tag: 'testing',
-            name: `Testing and review gates for ${context.primaryFeature}`,
-            rationale: `Make testability, review evidence, and regression risk explicit before build handoff.`,
-            primaryInputs: [context.answers['test-proof'] || context.answers.acceptance || '', input.successMetrics, context.answers['failure-modes'] || ''],
-            confirmationPrompts: ['What should be tested or reviewed first before trusting the implementation?']
-          }
-        ];
-
-  const sharedClosing: PhaseBlueprint[] = [
-    {
-      tag: 'rollout',
-      name: `Readiness and rollout checks for ${input.productName}`,
-      rationale: `Confirm that the current package is ready to leave planning and enter disciplined implementation.`,
-      primaryInputs: [input.timeline, input.constraints, input.successMetrics],
-      confirmationPrompts: ['What must be true before the next builder should start implementation?']
-    },
-    {
-      tag: 'handoff',
-      name: `Final handoff package for ${input.productName}`,
-      rationale: `Package the work so another builder can execute it without relying on hidden chat context.`,
-      primaryInputs: [input.desiredOutput, input.teamContext, context.acceptanceAnchor],
-      confirmationPrompts: ['What would a new builder still need clarified before they can begin?']
-    }
-  ];
-
-  const advancedExtras: PhaseBlueprint[] =
-    input.track === 'business'
-      ? [
-          {
-            tag: 'rollout',
-            name: `Operating model, monetization, and adoption proof for ${input.productName}`,
-            rationale: `Stress-test the operating model and business proof before implementation creates sunk cost.`,
-            primaryInputs: [context.answers.monetization || '', context.answers['adoption-risks'] || '', input.successMetrics],
-            confirmationPrompts: ['What evidence proves the business case, not just the feature idea?']
-          }
-        ]
-      : [
-          {
-            tag: 'security',
-            name: `Security and failure-mode gates for ${context.primaryFeature}`,
-            rationale: `Convert hidden complexity, failure states, and trust risks into explicit technical gates.`,
-            primaryInputs: [context.answers['failure-modes'] || '', context.answers['operating-risks'] || '', input.constraints],
-            confirmationPrompts: ['Which failure modes or trust risks would force a design change if unresolved?']
-          },
-          {
-            tag: 'observability',
-            name: `Observability and support readiness for ${input.productName}`,
-            rationale: `Make sure launch and support risks are visible before implementation begins.`,
-            primaryInputs: [context.answers.observability || '', input.risks, input.teamContext],
-            confirmationPrompts: ['What should be monitored, logged, or reviewed once the product is in use?']
-          },
-          {
-            tag: 'scaling',
-            name: `Scalability and architecture stress points for ${input.productName}`,
-            rationale: `Identify the scale, concurrency, or architecture assumptions most likely to cause rework later.`,
-            primaryInputs: [context.answers['scaling-risk'] || '', input.constraints, input.dataAndIntegrations],
-            confirmationPrompts: ['Which scale or concurrency assumptions need confirmation now instead of after implementation?']
-          }
-        ];
-
-  const beginnerExtras: PhaseBlueprint[] =
-    input.track === 'business'
-      ? [
-          {
-            tag: 'testing',
-            name: `Simple acceptance and review checklist for ${input.productName}`,
-            rationale: `Create an approachable proof checklist so a non-technical reviewer can decide whether the package is ready.`,
-            primaryInputs: [input.successMetrics, context.answers.acceptance || '', input.teamContext],
-            confirmationPrompts: ['Could a non-technical reviewer understand what success looks like?']
-          }
-        ]
-      : [
-          {
-            tag: 'deployment',
-            name: `Build order and release checklist for ${input.productName}`,
-            rationale: `Create a beginner-friendly repo, testing, and release order for the next technical builder.`,
-            primaryInputs: [context.answers['deployment-guardrails'] || '', context.answers['repo-shape'] || '', input.timeline],
-            confirmationPrompts: ['What should the next technical builder do first, second, and third?']
-          }
-        ];
-
-  const intermediateExtras: PhaseBlueprint[] =
-    input.track === 'technical'
-      ? [
-          {
-            tag: 'deployment',
-            name: `Deployment and release guardrails for ${input.productName}`,
-            rationale: `Turn delivery assumptions into concrete environment, release, and rollback gates.`,
-            primaryInputs: [context.answers['deployment-guardrails'] || '', input.constraints, input.timeline],
-            confirmationPrompts: ['What release assumption would create rework if it stays vague?']
-          }
+          createBlueprint('deployment', `Deployment and release guardrails for ${input.productName}`, `Turn delivery assumptions into concrete environment, release, and rollback gates.`, [context.answers['deployment-guardrails'] || '', input.constraints, input.timeline], ['What release assumption would create rework if it stays vague?'], 'implementation', ['Release guardrails'], ['package.json', 'README.md', 'docs/'])
         ]
       : [];
+  }
 
-  let phases = [...common, ...trackSpecific];
+  return input.track === 'business'
+    ? [
+        createBlueprint('rollout', `Operating model, monetization, and adoption proof for ${input.productName}`, `Stress-test the operating model and business proof before implementation creates sunk cost.`, [context.answers.monetization || '', context.answers['adoption-risks'] || '', input.successMetrics], ['What evidence proves the business case, not just the feature idea?'], 'verification', ['Operating model proof'])
+      ]
+    : [
+        createBlueprint('security', `Security and failure-mode gates for ${context.primaryFeature}`, `Convert hidden complexity, failure states, and trust risks into explicit technical gates.`, [context.answers['failure-modes'] || '', context.answers['operating-risks'] || '', input.constraints], ['Which failure modes or trust risks would force a design change if unresolved?'], 'verification', ['Failure-mode review']),
+        createBlueprint('observability', `Observability and support readiness for ${input.productName}`, `Make sure launch and support risks are visible before implementation begins.`, [context.answers.observability || '', input.risks, input.teamContext], ['What should be monitored, logged, or reviewed once the product is in use?'], 'verification', ['Support and observability notes']),
+        createBlueprint('scaling', `Scalability and architecture stress points for ${input.productName}`, `Identify the scale, concurrency, or architecture assumptions most likely to cause rework later.`, [context.answers['scaling-risk'] || '', input.constraints, input.dataAndIntegrations], ['Which scale or concurrency assumptions need confirmation now instead of after implementation?'], 'design', ['Stress-point list'])
+      ];
+}
 
-  if (input.level === 'beginner') phases = [...phases, ...beginnerExtras];
-  if (input.level === 'intermediate') phases = [...phases, ...intermediateExtras];
-  if (input.level === 'advanced') phases = [...phases, ...advancedExtras];
-
-  phases = [...phases, ...sharedClosing];
+function buildPhaseBlueprints(input: ProjectInput, context: ProjectContext, critique: CritiqueItem[]): PhaseBlueprint[] {
+  const phases = unique(
+    [
+      ...getDomainBlueprints(input, context),
+      ...getTrackBlueprints(input, context),
+      ...getRiskTriggeredBlueprints(input, context),
+      ...getLevelBlueprints(input, context),
+      createBlueprint('rollout', `Readiness and rollout checks for ${input.productName}`, `Confirm that the current package is ready to leave planning and enter disciplined implementation.`, [input.timeline, input.constraints, input.successMetrics], ['What must be true before the next builder should start implementation?'], 'verification', ['Readiness checklist']),
+      createBlueprint('handoff', `Final handoff package for ${input.productName}`, `Package the work so another builder can execute it without relying on hidden chat context.`, [input.desiredOutput, input.teamContext, context.acceptanceAnchor], ['What would a new builder still need clarified before they can begin?'], 'finalization', ['Final handoff recap'])
+    ].map((phase) => JSON.stringify(phase))
+  ).map((value) => JSON.parse(value) as PhaseBlueprint);
 
   if (critique.length > 6) {
     phases.splice(
-      phases.length - 1,
+      Math.max(1, phases.length - 1),
       0,
-      {
-        tag: 'scope',
-        name: `Open questions and unresolved blockers for ${input.productName}`,
-        rationale: `Document the gaps that should be closed before the final handoff is trusted.`,
-        primaryInputs: critique.map((item) => item.title),
-        confirmationPrompts: ['Which critique items must be resolved before handoff?']
-      }
+      createBlueprint(
+        'scope',
+        `Unresolved blockers and decision review for ${input.productName}`,
+        `Document the specific blockers, open decisions, and remaining assumptions that must stay visible before final handoff.`,
+        critique.map((item) => item.title),
+        ['Which critique items must be resolved before handoff?'],
+        'verification',
+        ['Blocker review list']
+      )
     );
   }
 
-  while (phases.length < context.profile.minimumPhaseCount) {
+  // Enforce minimum phase count from profile config
+  const minCount = context.profile.minimumPhaseCount;
+  const fillerTemplates: Array<{ tag: PhaseBlueprint['tag']; nameTemplate: string; rationaleTemplate: string; phaseType: PhasePlan['phaseType'] }> = [
+    {
+      tag: 'scope',
+      nameTemplate: `${input.productName} scope validation and planning review`,
+      rationaleTemplate: `Review the current plan against the original brief to confirm scope discipline, catch drift, and record any justified expansions or cuts.`,
+      phaseType: 'verification'
+    },
+    {
+      tag: 'workflow',
+      nameTemplate: `${input.productName} workflow edge-case and boundary review`,
+      rationaleTemplate: `Walk through the core workflow and at least one failure path to confirm the plan handles realistic friction instead of only the happy path.`,
+      phaseType: 'design'
+    },
+    {
+      tag: 'testing',
+      nameTemplate: `${input.productName} testability and evidence review`,
+      rationaleTemplate: `Confirm that the plan includes concrete checks, observable proof, and clear failure criteria before implementation begins.`,
+      phaseType: 'verification'
+    },
+    {
+      tag: 'architecture',
+      nameTemplate: `${input.productName} implementation target and repo readiness`,
+      rationaleTemplate: `Translate the planning outputs into implementation-ready assumptions, file targets, or explicit deferrals so the next builder knows where to start.`,
+      phaseType: 'design'
+    },
+    {
+      tag: 'data',
+      nameTemplate: `${input.productName} data boundary and integration review`,
+      rationaleTemplate: `Make the data entities, interfaces, and integration touchpoints explicit so hidden assumptions do not become expensive surprises later.`,
+      phaseType: 'design'
+    },
+    {
+      tag: 'security',
+      nameTemplate: `${input.productName} trust, privacy, and safety boundary check`,
+      rationaleTemplate: `Review the plan for trust risks, privacy boundaries, and safety constraints that should block implementation if left unresolved.`,
+      phaseType: 'verification'
+    }
+  ];
+
+  let fillerIndex = 0;
+  while (phases.length < minCount && fillerIndex < fillerTemplates.length) {
+    const template = fillerTemplates[fillerIndex];
+    const existingTags = new Set(phases.map((p) => p.tag));
+    if (!existingTags.has(template.tag)) {
+      phases.splice(
+        phases.length - 1,
+        0,
+        createBlueprint(
+          template.tag,
+          template.nameTemplate,
+          template.rationaleTemplate,
+          [input.mustHaveFeatures, input.constraints, input.successMetrics],
+          [`Does this ${template.phaseType} review add enough clarity to protect the first release?`],
+          template.phaseType,
+          [`${template.tag} review notes`]
+        )
+      );
+    }
+    fillerIndex++;
+  }
+
+  // Last resort: add domain-specific review phases instead of generic "planning review N"
+  const domainFillers = getDomainFillerNames(context.domainArchetype, input);
+  let fillerIdx = 0;
+  while (phases.length < minCount && fillerIdx < domainFillers.length) {
+    const filler = domainFillers[fillerIdx];
     phases.splice(
       phases.length - 1,
       0,
-      {
-        tag: 'handoff',
-        name: `${input.productName} package review checkpoint ${phases.length - context.profile.minimumPhaseCount + 2}`,
-        rationale: `Add an extra review checkpoint because ${context.profile.label} expects more disciplined package quality.`,
-        primaryInputs: [context.acceptanceAnchor, context.workflowAnchor, context.riskAnchor],
-        confirmationPrompts: ['What still needs confirmation before the next review checkpoint passes?']
-      }
+      createBlueprint(
+        filler.tag,
+        filler.name,
+        filler.rationale,
+        [input.mustHaveFeatures, input.constraints, input.successMetrics],
+        [`Does this ${filler.phaseType} review add enough clarity to protect the first release?`],
+        filler.phaseType,
+        [`${filler.name} review notes`]
+      )
     );
+    fillerIdx++;
   }
 
-  return phases.slice(0, Math.max(context.profile.minimumPhaseCount, Math.min(phases.length, 15)));
+  // Absolute last resort: only if domain fillers are exhausted and still below minimum
+  let absoluteLastIdx = 1;
+  while (phases.length < minCount) {
+    phases.splice(
+      phases.length - 1,
+      0,
+      createBlueprint(
+        'review',
+        `${input.productName} cross-phase consistency check ${absoluteLastIdx}`,
+        `Verify that earlier phase outputs still align with the project brief, scope cut, and acceptance criteria before the package is considered deep enough.`,
+        [input.productIdea, input.problemStatement],
+        [`Is consistency check ${absoluteLastIdx} necessary for this package?`],
+        'verification',
+        [`Consistency check ${absoluteLastIdx} notes`]
+      )
+    );
+    absoluteLastIdx++;
+  }
+
+  return phases.slice(0, 15);
 }
 
 function buildPhaseEntryCriteria(index: number, blueprint: PhaseBlueprint, input: ProjectInput, context: ProjectContext) {
@@ -842,17 +2767,97 @@ function buildPhaseEntryCriteria(index: number, blueprint: PhaseBlueprint, input
     'Previous exit gate passed.',
     'Unresolved blockers documented.',
     'Scope changes recorded.',
-    `Based on the project information provided: the source material for "${blueprint.name}" is present in the package.`
+    `The source material for "${blueprint.name}" is present in the package.`,
+    blueprint.phaseType === 'implementation'
+      ? 'Known repo targets are listed or explicitly marked as assumptions before editing starts.'
+      : `The planning evidence needed for ${blueprint.name} is visible before this phase starts.`
   ];
 }
 
-function buildPhaseExitCriteria(blueprint: PhaseBlueprint, context: ProjectContext) {
+function getPhaseSpecificNouns(blueprint: PhaseBlueprint, context: ProjectContext, input: ProjectInput) {
+  return unique(
+    normalizeTokens(`${blueprint.name} ${blueprint.rationale} ${context.primaryFeature} ${context.primaryAudience} ${input.productName}`)
+      .filter((token) => token.length >= 5)
+      .slice(0, 8)
+  );
+}
+
+function getRiskChecksForPhase(blueprint: PhaseBlueprint, context: ProjectContext, input: ProjectInput) {
+  const checks: string[] = [];
+  const isChildDomain =
+    context.domainArchetype === 'family-task' ||
+    context.domainArchetype === 'family-readiness' ||
+    context.domainArchetype === 'school-club' ||
+    /(kid|kids|child|children|parent|family|student|school|minor)/i.test(`${input.productName} ${input.productIdea}`);
+  if (context.riskFlags.includes('children') && isChildDomain) {
+    checks.push('Prove child users only see allowed items and parent or admin control boundaries stay explicit.');
+  }
+  const isMedicalDomain =
+    context.domainArchetype === 'clinic-scheduler' ||
+    /(clinic|medical|patient|healthcare|physician|doctor|nurse)/i.test(`${input.productName} ${input.productIdea}`);
+  if (context.riskFlags.includes('medical') && isMedicalDomain) {
+    checks.push('Prove reminder wording and scheduling artifacts avoid sensitive clinical details unless the package explicitly supports them.');
+  }
+  if (context.riskFlags.includes('legal') || context.riskFlags.includes('emergency')) {
+    checks.push('Prove the phase does not overclaim legal, emergency, or authority boundaries.');
+  }
+  if (context.riskFlags.includes('money')) {
+    checks.push('Prove the package avoids financial-advice claims unless that scope is explicitly intended.');
+  }
+  if (context.riskFlags.includes('privacy') || context.riskFlags.includes('sensitive-data')) {
+    checks.push('Prove visibility rules, data minimization, and disclaimer language are reviewable in this phase.');
+  }
+  return checks;
+}
+
+function buildPhaseExitCriteria(
+  blueprint: PhaseBlueprint,
+  context: ProjectContext,
+  input: ProjectInput,
+  nouns: string[],
+  expectedOutputs: string[],
+  evidenceExamples: string[],
+  failureConditions: string[]
+) {
   return [
-    `Based on your answers so far: the phase now reflects ${context.primaryFeature} and ${context.primaryAudience} rather than generic planning language.`,
-    `Please review and confirm: any remaining uncertainty for "${blueprint.name}" is explicitly recorded before the phase closes.`,
-    `Inferred assumption: no hidden assumptions remain unlabelled around ${context.outputAnchor}.`,
-    `${context.profile.gateStrength}`
+    `The phase output explicitly covers ${nouns.slice(0, 3).join(', ')} and stays tied to ${context.primaryAudience}.`,
+    `The expected output exists and is reviewable: ${expectedOutputs[0] || `phase deliverable for ${blueprint.name}`}.`,
+    `The reviewer can point to evidence such as ${evidenceExamples[0] || 'changed files, command output, or a checked scenario'} instead of generic claims.`,
+    `Any unresolved assumption, blocker, or deferred decision for ${input.productName} is written down before the phase closes.`,
+    `The phase would fail if ${failureConditions[0] || 'the output stayed generic, contradicted the scope, or lacked proof'}.`
+  ].concat(getRiskChecksForPhase(blueprint, context, input));
+}
+
+function getRepoTargetsForPhase(blueprint: PhaseBlueprint, context: ProjectContext) {
+  if (blueprint.repoTargets?.length) return blueprint.repoTargets;
+  if (blueprint.phaseType === 'implementation') {
+    return ['repo/README.md', 'repo/manifest.json', 'phases/current-phase artifacts', 'Likely app or src areas to confirm as assumptions'];
+  }
+  return [`phases/current-phase markdown artifacts for ${context.primaryFeature}`];
+}
+
+function buildTestingRequirements(
+  blueprint: PhaseBlueprint,
+  context: ProjectContext,
+  input: ProjectInput,
+  expectedOutputs: string[],
+  failureConditions: string[],
+  evidenceExamples: string[]
+) {
+  const base = [
+    `Scenario: review whether ${expectedOutputs[0] || blueprint.name} covers the phase goal without generic filler.`,
+    `Expected result: the output names the concrete ${context.primaryFeature} decisions, states, or boundaries that this phase owns.`,
+    `Failure condition: ${failureConditions[0] || 'the deliverable stays generic, contradictory, or unsupported by evidence'}.`,
+    `Evidence to capture: ${evidenceExamples[0] || 'changed files, command output, scenario notes, or observed results'}.`
   ];
+
+  if (blueprint.phaseType === 'implementation') {
+    base.splice(1, 0, 'Inspection method: run the relevant command, inspect the touched files, and record observed results or blockers.');
+  } else {
+    base.splice(1, 0, 'Inspection method: review the markdown outputs, compare them to the brief, and record specific decisions, edge cases, or blockers.');
+  }
+
+  return base.concat(getRiskChecksForPhase(blueprint, context, input));
 }
 
 function buildPhaseContent(
@@ -862,6 +2867,7 @@ function buildPhaseContent(
   context: ProjectContext,
   critique: CritiqueItem[]
 ): PhasePlan {
+  const nouns = getPhaseSpecificNouns(blueprint, context, input);
   const generatedFromInput = Array.from(
     new Set(
       blueprint.primaryInputs
@@ -898,21 +2904,79 @@ function buildPhaseContent(
       : `Only add technical detail when it protects the business outcome or reduces delivery risk.`;
 
   const entryCriteria = buildPhaseEntryCriteria(index, blueprint, input, context);
-  const exitCriteria = buildPhaseExitCriteria(blueprint, context);
+  const expectedOutputs = unique(
+    (blueprint.outputs || []).concat([
+      blueprint.phaseType === 'implementation'
+        ? `A repo-aware implementation or repo-target assumption list for ${blueprint.name}`
+        : `A concrete markdown deliverable for ${blueprint.name}`,
+      `${context.primaryAudience}-specific decisions for ${context.primaryFeature}`,
+      `Documented blockers, deferrals, or follow-up decisions for ${input.productName}`
+    ])
+  );
+  const evidenceExamples = unique(
+    [
+      `Changed file paths tied to ${blueprint.name}`,
+      blueprint.phaseType === 'implementation'
+        ? 'Command output with an observed result or failure'
+        : `A scenario note showing what was reviewed and what was observed about ${context.primaryFeature}`,
+      `A decision note naming the specific ${context.primaryFeature} choice made in this phase`,
+      `A blocker or risk note tied to ${context.domainSignals[0] || input.productName}`
+    ].concat(getRiskChecksForPhase(blueprint, context, input))
+  );
+  const isChildDomain =
+    context.domainArchetype === 'family-task' ||
+    context.domainArchetype === 'family-readiness' ||
+    context.domainArchetype === 'school-club' ||
+    /(kid|kids|child|children|parent|family|student|school|minor)/i.test(`${input.productName} ${input.productIdea}`);
+  const isMedicalDomain =
+    context.domainArchetype === 'clinic-scheduler' ||
+    /(clinic|medical|patient|healthcare|physician|doctor|nurse)/i.test(`${input.productName} ${input.productIdea}`);
+  const failureConditions = unique(
+    [
+      `the output stays generic instead of naming ${nouns.slice(0, 3).join(', ')}`,
+      'the review claims pass or proceed without concrete proof',
+      `the deliverable contradicts the stated scope, risk boundaries, or non-goals for ${input.productName}`
+    ].concat(
+      context.riskFlags.includes('children') && isChildDomain ? ['child visibility or parent-control rules stay ambiguous'] : [],
+      context.riskFlags.includes('medical') && isMedicalDomain ? ['sensitive reminder or provider-availability rules stay vague'] : [],
+      context.riskFlags.includes('legal') || context.riskFlags.includes('emergency') ? ['the package sounds more authoritative than its stated legal or emergency boundary'] : [],
+      context.riskFlags.includes('money') ? ['the package implies financial advice without explicit scope'] : []
+    )
+  );
+  const scopeGuards = unique([
+    `Do not add work outside ${blueprint.name}.`,
+    `Do not expand beyond ${context.primaryFeature} or the current v1 scope cut.`,
+    context.nonGoals.length
+      ? `Do not pull deferred items into this phase: ${context.nonGoals.slice(0, 3).join(', ')}.`
+      : 'Do not convert optional ideas into current-phase requirements.'
+  ]);
+  const continuityChecks = unique([
+    `Confirm earlier phase outputs still align with ${context.workflowAnchor}.`,
+    `Confirm the handoff still matches ${context.acceptanceAnchor}.`,
+    `Record any regression, contradiction, or stale assumption as a blocker.`
+  ]);
+  const exitCriteria = buildPhaseExitCriteria(blueprint, context, input, nouns, expectedOutputs, evidenceExamples, failureConditions);
+  const reviewChecklist = unique([
+    `Review the output against the phase goal for ${blueprint.name}.`,
+    `Check that ${nouns.slice(0, 3).join(', ')} are named directly instead of implied.`,
+    `Check that at least one evidence file proves a concrete scenario, command result, or decision.`,
+    `Check that deferred scope and blockers remain visible.`
+  ].concat(getRiskChecksForPhase(blueprint, context, input)));
   const riskFocus = [
     `Based on your answers so far: ${truncateText(input.risks, 18)}`,
     `Based on your answers so far: ${truncateText(context.riskAnchor, 18)}`
   ];
   const nextActions = [
-    `Confirm the open questions for "${blueprint.name}" before treating the output as settled.`,
-    `Update the package so ${context.primaryAudience} and ${context.primaryFeature} are referenced directly in this phase.`,
-    `Record what is already supported by the project information, what still needs confirmation, and what is still an inferred assumption.`
+    `Carry forward the concrete decisions from "${blueprint.name}" instead of rephrasing them generically.`,
+    `Preserve the evidence trail for ${context.primaryFeature}, including any blocker, deferral, or observed result.`,
+    `Do not revisit already-locked scope unless this phase found a contradiction that must be surfaced.`
   ];
 
   return {
     index,
     slug: `phase-${String(index).padStart(2, '0')}`,
     name: blueprint.name,
+    phaseType: blueprint.phaseType,
     goal: blueprint.rationale,
     focusSummary: `This phase is shaped by ${context.primaryAudience}, ${context.primaryFeature}, and the selected mode ${context.profile.label}.`,
     riskFocus,
@@ -920,32 +2984,39 @@ function buildPhaseContent(
     needsConfirmation,
     inferredAssumptions,
     nextActions,
+    domainSignals: unique(context.domainSignals.concat(nouns)).slice(0, 10),
     entryCriteria,
     implementationChecklist: [
       `Review the project brief, questionnaire answers, and critique before editing "${blueprint.name}".`,
       `Apply ${context.profile.label} guidance: ${context.profile.planningExpectation}`,
-      `Keep this phase anchored to these current inputs: ${context.keywords.slice(0, 4).join(', ') || input.productName}.`,
-      `Use ${context.primaryFeature} and ${context.outputAnchor} as the main decision anchors, not generic planning filler.`,
+      `Keep this phase anchored to these current inputs: ${unique(context.keywords.concat(nouns)).slice(0, 5).join(', ') || input.productName}.`,
+      `Use ${context.primaryFeature}, ${context.outputAnchor}, and ${nouns.slice(0, 3).join(', ')} as the main decision anchors, not generic planning filler.`,
       businessSpecific,
       technicalSpecific,
+      blueprint.phaseType === 'implementation'
+        ? `If exact repo targets are unknown, propose likely areas such as ${getRepoTargetsForPhase(blueprint, context).join(', ')} and label them as assumptions instead of facts.`
+        : `Focus on planning outputs, decisions, and evidence notes for ${blueprint.name}; do not invent implementation files.`,
       'Do not hardcode final AI prompts. Instead, ask the coding AI to draft implementation or review prompts from this phase output.'
     ],
     businessAcceptanceCriteria: [
-      `Based on your answers so far: a stakeholder can explain how "${blueprint.name}" supports ${input.productName} for ${context.primaryAudience}.`,
-      `Please review and confirm: the business outcome still lines up with ${truncateText(input.successMetrics, 16)}.`,
-      `Based on your answers so far: the phase protects the stated non-goals and constraints instead of expanding scope.`
+      `A stakeholder can explain how "${blueprint.name}" supports ${input.productName} for ${context.primaryAudience}.`,
+      `The business outcome still lines up with ${truncateText(input.successMetrics, 16)}.`,
+      `The phase protects the stated non-goals and constraints instead of expanding scope.`
     ],
     technicalAcceptanceCriteria: [
-      `Based on your answers so far: the implementation implications connect back to ${context.primaryFeature} and ${context.secondaryFeature}.`,
-      `Please review and confirm: the package is explicit enough about ${context.profile.technicalFocus}.`,
-      `Inferred assumption: any unresolved technical boundary is labelled rather than presented as settled fact.`
+      `The implementation implications connect back to ${context.primaryFeature} and ${context.secondaryFeature}.`,
+      `The package is explicit enough about ${context.profile.technicalFocus}.`,
+      `Any unresolved technical boundary is labelled rather than presented as settled fact.`
     ],
-    testingRequirements: [
-      `Use the current acceptance anchor as proof guidance: ${context.acceptanceAnchor}.`,
-      `Verify that the phase output still matches the workflow answer: ${context.workflowAnchor}.`,
-      `Re-check the highest risk focus before closing the phase: ${context.riskAnchor}.`
-    ],
+    testingRequirements: buildTestingRequirements(blueprint, context, input, expectedOutputs, failureConditions, evidenceExamples),
     exitCriteria,
+    expectedOutputs,
+    reviewChecklist,
+    evidenceExamples,
+    failureConditions,
+    scopeGuards,
+    continuityChecks,
+    repoTargets: getRepoTargetsForPhase(blueprint, context),
     implementationPromptPlaceholder:
       `Ask your coding AI to draft an implementation prompt for "${blueprint.name}" using this package's constraints, must-have scope, and acceptance criteria.`,
     reviewPromptPlaceholder:
@@ -1007,6 +3078,7 @@ function renderPhasePlanMarkdown(phases: PhasePlan[]) {
       (phase) => `## ${phase.index}. ${phase.name}
 
 - Goal: ${phase.goal}
+- Phase type: ${phase.phaseType}
 - Focus summary: ${phase.focusSummary}
 - Gate file pair: /gates/gate-${String(phase.index).padStart(2, '0')}-entry.md and /gates/gate-${String(phase.index).padStart(2, '0')}-exit.md
 - Phase folder: /phases/${phase.slug}/
@@ -1031,6 +3103,15 @@ ${score.categories.map((category) => `| ${category.label} | ${category.score}/${
 ## Rating
 ${score.rating}
 
+## Lifecycle explanation
+${bundle.lifecycleStatus === 'Blocked'
+    ? 'This package is blocked until the listed blockers are resolved. The score and rating are intentionally capped so the package cannot look build-ready while blocked.'
+    : bundle.lifecycleStatus === 'Draft'
+      ? 'This package is still in Draft, so the score cannot overclaim readiness beyond "Needs work" until review conditions are met.'
+      : bundle.lifecycleStatus === 'ReviewReady'
+        ? 'This package is review-ready, which means it may be strong but is not yet explicitly approved for build.'
+        : 'This package is approved for build, and the score is allowed to reflect that status.'}
+
 ## Blockers
 ${score.blockers.length ? score.blockers.map((item) => `- ${item}`).join('\n') : '- No blocking issues detected.'}
 
@@ -1047,6 +3128,9 @@ ${score.categories
 
 ## What must improve before build handoff
 ${score.recommendations.map((item) => `- ${item}`).join('\n')}
+
+## Score adjustments
+${score.adjustments.length ? score.adjustments.map((item) => `- ${item}`).join('\n') : '- No lifecycle-based score adjustments were needed.'}
 `;
 }
 
@@ -1111,6 +3195,14 @@ function formatWarningLine(warning: WarningItem) {
 }
 
 function inferImplementationFileHints(phase: PhasePlan) {
+  if (phase.phaseType !== 'implementation') {
+    return [`Planning artifacts and markdown evidence tied to ${phase.name}, not speculative implementation files.`];
+  }
+
+  if (phase.repoTargets.length) {
+    return phase.repoTargets;
+  }
+
   const signature = `${phase.slug} ${phase.name}`.toLowerCase();
   if (/brief|audience|stakeholder|workflow|handoff/.test(signature)) {
     return ['Product documentation, planning notes, and implementation README or docs that define the workflow clearly.'];
@@ -1139,6 +3231,50 @@ function buildAgentPrompt(
 ) {
   const implementationHints = inferImplementationFileHints(phase);
   const includeAgents = agentName === 'OpenCode';
+  const phaseWorkMode =
+    phase.phaseType === 'planning' || phase.phaseType === 'design'
+      ? 'planning outputs and explicit decisions'
+      : phase.phaseType === 'implementation'
+        ? 'repo-aware implementation work'
+        : phase.phaseType === 'finalization'
+          ? 'final handoff cleanup and release caveats'
+          : 'verification evidence and review notes';
+  const requiredOutputLines =
+    phase.phaseType === 'implementation'
+      ? `1. Restate the phase goal and entry gate in your own words.
+2. List the exact repo files you plan to change before editing anything. If exact targets are unknown, propose likely areas and label them as assumptions.
+3. Complete only the implementation work required for this phase.
+4. Run or describe the checks from TEST_PLAN.md and report observed results.
+5. Return a short handoff summary with changed files, test results, remaining risks, and whether the exit gate now passes.
+6. Draft updated text for HANDOFF_SUMMARY.md and NEXT_PHASE_CONTEXT.md.`
+      : phase.phaseType === 'finalization'
+        ? `1. Restate the final phase goal and the release caveats in your own words.
+2. Summarize the completed package outputs and the blockers or caveats that still matter.
+3. Update only the markdown handoff, recap, and verification files required for this phase.
+4. Run or describe the review checks from TEST_PLAN.md and report observed results.
+5. Return a short final recap that another builder or reviewer can trust without chat history.`
+        : `1. Restate the phase goal and entry gate in your own words.
+2. Produce the planning outputs, decisions, open questions, and evidence notes required for this phase.
+3. Do not invent repo file changes unless the phase packet names them. If likely implementation areas matter, label them as assumptions rather than facts.
+4. Run or describe the inspection or review checks from TEST_PLAN.md and report observed results.
+5. Return a short handoff summary with the decisions made, evidence captured, remaining risks, and whether the exit gate now passes.
+6. Draft updated text for HANDOFF_SUMMARY.md and NEXT_PHASE_CONTEXT.md.`;
+  const expectedOutputLines =
+    phase.phaseType === 'implementation'
+      ? [
+          'A concise restatement of the phase goal and entry gate.',
+          'A list of repo files changed for this phase, or clearly labelled repo-target assumptions.',
+          'Completed implementation work for this phase only.',
+          'Test output or a clear note explaining what could not be tested.',
+          `A short handoff summary suitable for phases/${phase.slug}/HANDOFF_SUMMARY.md.`
+        ]
+      : [
+          'A concise restatement of the phase goal and entry gate.',
+          `The expected outputs for ${phase.name} with concrete decisions, scenarios, and blockers.`,
+          'Evidence notes tied to reviewed files, commands, or observed results.',
+          'A clear note explaining what could not be verified yet.',
+          `A short handoff summary suitable for phases/${phase.slug}/HANDOFF_SUMMARY.md.`
+        ];
 
   return `# ${agentName.toUpperCase()} BUILD PROMPT
 
@@ -1187,23 +3323,17 @@ ${context.primaryFeature}
 Constraints that still matter:
 ${context.constraints.join('; ') || 'Keep the work local-first, markdown-first, and within the current MVP scope.'}
 
+Phase work mode:
+${phaseWorkMode}
+
 Required output from you:
-1. Restate the phase goal and entry gate in your own words.
-2. List the exact implementation files you plan to change before editing anything.
-3. Complete the implementation for this phase only.
-4. Run or describe the tests from TEST_PLAN.md.
-5. Return a short handoff summary that includes changed files, test results, remaining risks, and whether the exit gate now passes.
-6. Draft updated text for HANDOFF_SUMMARY.md and NEXT_PHASE_CONTEXT.md.
+${requiredOutputLines}
 
 Do not jump ahead to later phases. If the phase packet is missing information, call it out explicitly before coding.
 \`\`\`
 
 ## Expected output
-- A concise restatement of the phase goal and entry gate.
-- A list of implementation repo files changed for this phase.
-- Completed work for this phase only.
-- Test output or a clear note explaining what could not be tested.
-- A short handoff summary suitable for phases/${phase.slug}/HANDOFF_SUMMARY.md.
+${expectedOutputLines.map((line) => `- ${line}`).join('\n')}
 
 ## Tests to run
 ${listToBullets(phase.testingRequirements, 'Run the smallest test or smoke proof that demonstrates this phase now works.')}
@@ -1212,11 +3342,12 @@ ${listToBullets(phase.testingRequirements, 'Run the smallest test or smoke proof
 ${listToBullets(
   implementationHints.concat([
     `phases/${phase.slug}/HANDOFF_SUMMARY.md`,
-    `phases/${phase.slug}/EXIT_GATE.md`,
     `phases/${phase.slug}/NEXT_PHASE_CONTEXT.md`,
-    'repo/xelera-state.json'
+    `phases/${phase.slug}/VERIFICATION_REPORT.md`
   ]),
-  'The implementation repo files required for this phase and the phase packet markdown should be updated.'
+  phase.phaseType === 'implementation'
+    ? 'The repo files required for this phase and the phase packet markdown should be updated.'
+    : 'The phase packet markdown and evidence artifacts should be updated; do not fabricate implementation files.'
 )}
 
 ## Handoff summary to request before moving on
@@ -1236,6 +3367,7 @@ function buildPhaseBrief(
   assumptionsAndQuestions: { assumptions: string[]; openQuestions: string[] },
   nextPhase?: PhasePlan
 ) {
+  const supportModules = getPhaseSupportModules(phase, input, context);
   const outOfScope = [
     nextPhase
       ? `Do not start "${nextPhase.name}" in this phase. Finish and verify ${phase.name} first.`
@@ -1262,11 +3394,19 @@ ${phase.goal}
 ## Why this phase exists
 ${phase.focusSummary}
 
+## Phase type
+${phase.phaseType}
+
 ## What you should do now
 1. Read the goal and open questions below.
 2. Check ENTRY_GATE.md before starting work.
-3. Give this file and the matching build prompt to your coding agent.
-4. Do not move to the next phase yet. Verification happens after the work is reviewed.
+3. Review related support folders only if they are listed below.
+4. ${context.uiRelevant ? 'If this phase touches interface work, open /ui-ux/UI_UX_START_HERE.md and the related UI/UX files before building screens.' : 'If interface work appears in this phase unexpectedly, stop and activate the lightweight /ui-ux/ module first.'}
+5. Give this file and the matching build prompt to your coding agent.
+6. Do not move to the next phase yet. Verification happens after the work is reviewed.
+
+## Related support folders for this phase
+${renderSupportModuleLines(supportModules, 'No extra support folder is required beyond the current phase packet unless new scope, data, or integration risk appears.')}
 
 ## Files to give Codex or Claude Code for this phase
 - 00_PROJECT_CONTEXT.md
@@ -1295,10 +3435,7 @@ ${phase.focusSummary}
 ${phase.index > 1 ? `- phases/phase-${String(phase.index - 1).padStart(2, '0')}/HANDOFF_SUMMARY.md` : '- No previous phase handoff summary is required for phase 1.'}
 
 ## Output to expect
-- A focused implementation for this phase only
-- A list of changed implementation files
-- Test evidence for this phase
-- A completed handoff summary for the next phase
+${phase.expectedOutputs.map((item) => `- ${item}`).join('\n')}
 
 ## This phase is ready only when
 - The work matches the goal above.
@@ -1307,7 +3444,15 @@ ${phase.index > 1 ? `- phases/phase-${String(phase.index - 1).padStart(2, '0')}/
 - The next builder could understand what happened without hidden chat context.
 
 ## Out of scope for this phase
-${outOfScope.map((item) => `- ${item}`).join('\n')}
+${unique(outOfScope.concat(phase.scopeGuards)).map((item) => `- ${item}`).join('\n')}
+
+## Evidence expected
+${phase.evidenceExamples.map((item) => `- ${item}`).join('\n')}
+- ${context.uiRelevant ? 'UI screenshots and screenshot review notes for any screen changed in this phase.' : 'If a UI was introduced in this phase, add screenshots and UI review notes before closing it.'}
+${supportModules.length ? supportModules.map((module) => `- Evidence from ${module.folder} if this phase changes that area.`).join('\n') : ''}
+
+## Failure or blocker conditions
+${phase.failureConditions.map((item) => `- ${item}`).join('\n')}
 
 ## Project-specific anchors
 - Product: ${input.productName}
@@ -1350,90 +3495,191 @@ ${phase.entryCriteria.map((item) => `- ${item}`).join('\n')}
 `;
 }
 
-function buildPhaseExitGate(phase: PhasePlan) {
+function buildPhaseExitGate(phase: PhasePlan, context: ProjectContext) {
   return `# EXIT_GATE
 
 ## What this file is for
-This file tells you what must be true before the phase can be called complete.
+This file tells you what must be true before the phase can be called complete. The checks below are intentionally phase-specific so a reviewer can tell the difference between real proof and filler.
 
 ## Phase
 ${phase.name}
 
 ## This phase is ready only when
 ${phase.exitCriteria.map((item) => `- ${item}`).join('\n')}
-- Existing functionality and previously completed phase outputs still work, or any regression is documented as a blocker.
+
+## Concrete expected outputs
+${phase.expectedOutputs.map((item) => `- ${item}`).join('\n')}
+
+## What must be reviewed
+${phase.reviewChecklist.map((item) => `- ${item}`).join('\n')}
 
 ## Evidence to gather before closing the phase
-Evidence means the files or notes that prove the phase was checked. Use real file paths when you fill out VERIFICATION_REPORT.md.
+${phase.evidenceExamples.map((item) => `- ${item}`).join('\n')}
 
-${phase.testingRequirements.map((item) => `- ${item}`).join('\n')}
+## Failure or blocker conditions
+${phase.failureConditions.map((item) => `- ${item}`).join('\n')}
+
+## Regression or continuity checks
+${phase.continuityChecks.map((item) => `- ${item}`).join('\n')}
+
+## Scope guard
+${phase.scopeGuards.map((item) => `- ${item}`).join('\n')}
 
 ## What you should do next
 1. Review the completed work against this checklist.
 2. Open VERIFY_PROMPT.md and EVIDENCE_CHECKLIST.md.
-3. Fill out VERIFICATION_REPORT.md.
-4. Do not move to the next phase yet unless verification says the phase can proceed.
+3. ${phase.phaseType === 'implementation' && context.uiRelevant ? 'If interface work changed, review screenshots and UI_UX_GATE.md before broader testing.' : 'If interface work unexpectedly appeared, add UI/UX review before broader testing.'}
+4. Fill out VERIFICATION_REPORT.md.
+5. Do not move to the next phase yet unless verification says the phase can proceed.
 `;
 }
 
 function buildPhaseTestPlan(phase: PhasePlan) {
   return `# TEST_PLAN
 
-## Tests to run for ${phase.name}
-${phase.testingRequirements.map((item) => `- ${item}`).join('\n')}
+## Scenario 1
+${phase.testingRequirements[0] || `Review whether ${phase.name} produced the concrete output this phase promised.`}
 
-## Expected output
-- Clear pass/fail notes for the tests that ran
-- Any blockers that prevented testing
-- A recommendation on whether the exit gate is satisfied
+## Steps or inspection method
+${phase.testingRequirements.slice(1, 2).map((item) => `- ${item}`).join('\n') || '- Review the relevant artifacts, compare them to the phase goal, and record observed results.'}
+
+## Expected result
+- ${phase.expectedOutputs[0] || `The deliverable for ${phase.name} is concrete, phase-specific, and reviewable.`}
+
+## Failure condition
+- ${phase.failureConditions[0] || 'The output stays generic, contradictory, or unsupported by evidence.'}
+
+## Evidence to capture
+${phase.evidenceExamples.map((item) => `- ${item}`).join('\n')}
+
+## Regression or continuity check
+${phase.continuityChecks.map((item) => `- ${item}`).join('\n')}
 `;
 }
 
-function buildPhaseHandoffSummary(phase: PhasePlan) {
+function buildPhaseHandoffSummary(phase: PhasePlan, input: ProjectInput, context: ProjectContext) {
+  const supportModules = getPhaseSupportModules(phase, input, context);
   return `# HANDOFF_SUMMARY
 
 ## What this file is for
-Use this file to leave a short summary for the next person or agent. It should explain what changed, what was checked, and what still needs attention.
+Use this file to leave a short summary for the next person or agent. The prefilled sections below show what this phase should produce and what risks it protects against. Replace the "pending" items with real outcomes before advancing.
 
-## What to do next
-Fill this out after the phase work and verification review are done.
+## Phase goal
+${phase.goal}
 
-Use this template after completing ${phase.name}.
+## Expected outputs from this phase
+${phase.expectedOutputs.map((item) => `- ${item}`).join('\n')}
 
-- Phase outcome:
-- Implementation files changed:
-- Tests run:
-- Exit gate status:
-- Remaining blockers or warnings:
-- Assumptions that still need confirmation:
+## Decisions that should be captured before moving on
+${phase.reviewChecklist.slice(0, 4).map((item) => `- ${item}`).join('\n')}
+- What changed in this phase compared to the previous plan
+- Which assumptions were confirmed and which remain open
+- Whether the scope stayed within the original v1 cut
+
+## Likely files or artifacts touched
+${phase.repoTargets.map((item) => `- ${item}`).join('\n')}
+
+## Evidence that should be pasted here by the user or agent
+${phase.evidenceExamples.map((item) => `- ${item}`).join('\n')}
+- Screenshots or command output if this phase involved implementation
+- Specific file paths and line numbers for any changes made
+- Observed test results or inspection notes
+
+## Risks to carry forward
+${phase.riskFocus.map((item) => `- ${item}`).join('\n')}
+
+## Related support folders if this phase changed them
+${renderSupportModuleLines(supportModules, 'No extra support folder needs carry-forward notes unless the phase changed scope, safety, integrations, or architecture.')}
+
+## Next-phase risks if this phase is incomplete
+- If decisions above are not recorded, the next phase will rebuild on hidden assumptions.
+- If evidence is missing, the next builder cannot verify what was actually checked.
+- If blockers are not documented, they will reappear later as expensive surprises.
+
+## Blockers to record if they appear
+${phase.failureConditions.map((item) => `- ${item}`).join('\n')}
+
+## Examples of acceptable completion notes
+- "Locked order states to created, acknowledged, in-progress, ready, picked-up, cancelled. Decision: no partial-pickup in v1."
+- "Confirmed child users cannot view parent dashboard. Evidence: role matrix in PHASE_BRIEF.md lines 45-52."
+- "Build passed. Changed files: src/orders.ts, src/kitchen-queue.ts. No new blockers."
+- "Deferring multi-location support per scope cut. Documented in NEXT_PHASE_CONTEXT.md."
+
+## Completion update
+- Phase outcome: pending update
+- Files or artifacts actually changed: pending update
+- Checks run and observed result: pending update
+- Exit gate status: pending update
+- Remaining blockers or warnings: pending update
+- Assumptions that still need confirmation: pending update
 `;
 }
 
-function buildNextPhaseContext(phase: PhasePlan, nextPhase: PhasePlan | undefined) {
+function buildNextPhaseContext(phase: PhasePlan, nextPhase: PhasePlan | undefined, input: ProjectInput, context: ProjectContext) {
+  const supportModules = getPhaseSupportModules(phase, input, context);
   return `# NEXT_PHASE_CONTEXT
 
 ## What this file is for
-This file helps the next phase start with the right context instead of guessing what happened earlier.
+This file helps the next phase start with the right context instead of guessing what happened earlier. It lists what the current phase should have produced, what must carry forward, and what risks appear if the current phase is incomplete.
 
 ## Current phase
 ${phase.name}
 
-## Next phase
-${nextPhase ? nextPhase.name : 'No next phase. This is the final phase.'}
+## ${nextPhase ? 'Next phase' : 'Final package recap'}
+${nextPhase ? nextPhase.name : `This is the final phase for ${phase.name}.`}
+
+## Expected deliverables from the current phase
+${phase.expectedOutputs.map((item) => `- ${item}`).join('\n')}
+
+## Decisions that should be captured before moving on
+${phase.reviewChecklist.slice(0, 4).map((item) => `- ${item}`).join('\n')}
+- Concrete scope cuts or deferrals made in this phase
+- Any change to the original plan and why it was justified
+
+## Evidence that should be pasted by the user or agent
+${phase.evidenceExamples.map((item) => `- ${item}`).join('\n')}
+- Specific file paths, line numbers, or command output
+- Screenshot references if UI or visual work was involved
+- Observed test results with pass/fail status
 
 ## What the next phase should inherit
-${listToBullets(phase.nextActions, 'No additional context was generated for the next phase.')}
+${listToBullets(phase.nextActions.concat(phase.reviewChecklist.slice(0, 2)), 'No additional context was generated for the next phase.')}
 
-## What you should do next
-- Update this file before handing work to the next builder.
-- Keep it short and specific.
-- Mention anything the next phase must know to avoid rework.
+## What not to revisit
+${phase.scopeGuards.map((item) => `- ${item}`).join('\n')}
 
-## What the next builder should request
+## Unresolved assumptions
+${phase.inferredAssumptions.map((item) => `- ${item}`).join('\n')}
+
+## Risks or decisions to preserve
+${phase.riskFocus.concat(phase.failureConditions.slice(0, 2)).map((item) => `- ${item}`).join('\n')}
+
+## Support folders to carry forward only if touched
+${renderSupportModuleLines(supportModules, 'No extra support folder needs carry-forward notes unless the phase changed scope, safety, integrations, or architecture.')}
+
+## Next-phase risks if this phase is incomplete
+- If deliverables above are missing, ${nextPhase ? nextPhase.name : 'the final handoff'} will be built on vague or hidden assumptions.
+- If evidence is not recorded, the next builder cannot verify what was actually checked or decided.
+- If blockers are not documented, they will resurface later as expensive rework.
+
+## Concrete examples of acceptable completion notes
+- "Phase locked the state machine to 5 states. Evidence: states.md lines 12-28. No blockers."
+- "Confirmed budget thresholds per household discussion. Evidence: threshold table in PHASE_BRIEF.md."
+- "Build passed. Changed files: src/components/OrderList.tsx, src/lib/kitchen.ts. Tests: 3 passed, 0 failed."
+- "Blocked: cannot define data retention rules until compliance review completes. Documented in VERIFICATION_REPORT.md."
+
+${nextPhase
+    ? `## What the next builder should request
 - A short recap of what changed in this phase
-- The implementation files touched
-- The tests that passed or failed
-- Any blocker or warning that still matters before ${nextPhase ? nextPhase.name : 'final handoff'}
+- The files or artifacts touched, with specific paths
+- The checks that passed or failed, with observed results
+- Any blocker or warning that still matters before ${nextPhase.name}
+- Confirmation that the expected deliverables for ${phase.name} are complete and reviewable`
+    : `## Final release caveats
+${phase.failureConditions.map((item) => `- ${item}`).join('\n')}
+
+## Final package summary
+${phase.expectedOutputs.map((item) => `- ${item}`).join('\n')}`}
 `;
 }
 
@@ -1442,6 +3688,8 @@ function buildVerifyPrompt(
   bundle: ProjectBundle,
   input: ProjectInput
 ) {
+  const context = buildContext(input);
+  const supportModules = getPhaseSupportModules(phase, input, context);
   const fileList = [
     `phases/${phase.slug}/PHASE_BRIEF.md`,
     `phases/${phase.slug}/ENTRY_GATE.md`,
@@ -1468,15 +3716,17 @@ Use this file to review whether ${input.productName} phase ${String(phase.index)
 ## Files to inspect
 - ${fileList}
 - All changed implementation files for this phase
+${context.uiRelevant ? '- /ui-ux/UI_UX_GATE.md\n- /ui-ux/SCREEN_INVENTORY.md\n- /ui-ux/USER_WORKFLOWS.md\n- Screenshot evidence for any changed UI screen' : '- If this phase introduced UI, inspect the lightweight /ui-ux/ files and screenshot evidence before passing.'}
+${supportModules.length ? supportModules.map((module) => `- ${module.folder} because ${module.reason.toLowerCase()}`).join('\n') : ''}
 
 ## What evidence means
-Evidence means the files or notes that prove you checked the phase. Good evidence usually includes the changed files, the handoff summary, the evidence checklist, and any test output you reviewed.
+Evidence means files or notes that prove what was checked, what was observed, what changed, and what decision was made. Useful evidence usually includes changed files, command output, scenario results, specific artifacts reviewed, or blockers tied to this phase.
 
 ## Functional checks
-- [ ] The phase implementation satisfies the goal: ${phase.goal}
+- [ ] The phase work satisfies the goal: ${phase.goal}
 - [ ] Entry gate criteria are met
 - [ ] Exit gate criteria are met
-- [ ] Tests from TEST_PLAN.md were run and passed
+- [ ] TEST_PLAN.md scenarios were reviewed and the observed result is recorded
 - [ ] No new blockers were introduced
 
 ## Scope checks
@@ -1489,6 +3739,11 @@ Evidence means the files or notes that prove you checked the phase. Good evidenc
 - [ ] No external service dependencies were added without explicit justification
 - [ ] No auth, payments, database, or cloud backend requirements were introduced
 - [ ] All files remain local and markdown-based
+
+## UI and screenshot checks
+- [ ] ${context.uiRelevant ? 'Changed interface screens match USER_WORKFLOWS.md and SCREEN_INVENTORY.md' : 'If UI work exists, the team activated the UI/UX module and documented the screens.'}
+- [ ] ${context.uiRelevant ? 'Screenshot review happened before final testing' : 'If UI work exists, screenshot evidence was captured before passing.'}
+- [ ] ${context.uiRelevant ? 'Core empty, loading, and error states exist for changed UI flows' : 'If UI work exists, empty, loading, and error states were reviewed.'}
 
 ## Markdown-first constraint checks
 - [ ] All handoff files are readable markdown
@@ -1506,9 +3761,7 @@ Evidence means the files or notes that prove you checked the phase. Good evidenc
 - [ ] Checklists are concrete and actionable
 
 ## Regression risks
-- [ ] Changes do not break earlier phase outputs
-- [ ] Existing tests still pass
-- [ ] No unintended side effects in repo structure or shared files
+${phase.continuityChecks.map((item) => `- [ ] ${item}`).join('\n')}
 
 ## Final decision rules
 - Set result to "pass" only if all functional checks, scope checks, and constraint checks pass.
@@ -1521,10 +3774,13 @@ Evidence means the files or notes that prove you checked the phase. Good evidenc
 - A completed phases/${phase.slug}/VERIFICATION_REPORT.md
 - A checked phases/${phase.slug}/EVIDENCE_CHECKLIST.md
 - A clear recommendation: proceed, revise, or blocked
+- ${context.uiRelevant ? 'A UI review outcome that is consistent with /ui-ux/UI_UX_GATE.md' : 'If UI work appeared, a lightweight UI review outcome before pass.'}
 `;
 }
 
-function buildVerificationReport(phase: PhasePlan) {
+function buildVerificationReport(phase: PhasePlan, input: ProjectInput) {
+  const context = buildContext(input);
+  const supportModules = getPhaseSupportModules(phase, input, context);
   return `# VERIFICATION_REPORT for ${phase.name}
 
 ## What this file is for
@@ -1534,6 +3790,7 @@ Use this file to record the review result for the current phase. Keep the requir
 - Fill in the sections below after reviewing the phase.
 - If you are unsure, leave result or recommendation as pending.
 - Do not select pass + proceed unless you can list real evidence files.
+- Make the final decision sentence match the structured result and recommendation.
 
 ## result: pending
 Allowed: pass | fail | pending
@@ -1557,6 +3814,7 @@ Selected recommendation: pending
 - phases/${phase.slug}/EVIDENCE_CHECKLIST.md
 - repo/manifest.json
 - repo/xelera-state.json
+${supportModules.map((module) => `- ${module.folder}`).join('\n')}
 
 ## files changed
 -
@@ -1568,6 +3826,7 @@ Selected recommendation: pending
 Evidence means the files or notes that prove the phase was checked. List the evidence files you actually reviewed before selecting \`pass + proceed\`.
 
 - pending
+${context.uiRelevant ? 'Optional UI evidence note: if this phase changed interface work, replace `pending` with ui-ux/UI_UX_GATE.md and any screenshot evidence files.' : 'Optional UI evidence note: if this phase unexpectedly added a user-facing interface, replace `pending` with ui-ux/UI_UX_GATE.md and screenshot evidence files.'}
 
 Rules:
 - Replace \`pending\` with real evidence file paths.
@@ -1587,14 +3846,16 @@ Pending completion of all sections above. Update result and recommendation befor
 `;
 }
 
-function buildEvidenceChecklist(phase: PhasePlan) {
+function buildEvidenceChecklist(phase: PhasePlan, input: ProjectInput) {
+  const context = buildContext(input);
+  const supportModules = getPhaseSupportModules(phase, input, context);
   return `# EVIDENCE_CHECKLIST for ${phase.name}
 
 ## What this file is for
 Use this file to make sure the phase review includes enough proof before you try to advance.
 
 ## What evidence means
-Evidence means the files or notes that prove the phase was checked. Real evidence is usually a combination of reviewed files, test output, and a completed handoff summary.
+Evidence means the files or notes that prove the phase was checked. Real evidence is usually a combination of reviewed files, test output or scenario results, observed outcomes, decisions made, blockers found, and a completed handoff summary.
 
 ## What you should do now
 - Check the items that are truly complete.
@@ -1603,32 +3864,36 @@ Evidence means the files or notes that prove the phase was checked. Real evidenc
 
 ## Required evidence
 - [ ] VERIFICATION_REPORT.md completed with result and recommendation
-- [ ] HANDOFF_SUMMARY.md updated with phase outcome
-- [ ] Changed implementation files listed and committed or documented
+- [ ] HANDOFF_SUMMARY.md completion update filled with actual phase outcome
+- [ ] At least one evidence file names a concrete scenario, command output, changed file, observed result, decision, or blocker
+- [ ] The evidence references ${phase.domainSignals.slice(0, 3).join(', ') || 'the actual phase-specific nouns'} instead of generic filler
+- [ ] ${context.uiRelevant ? 'Any changed interface work includes screenshot evidence plus a UI/UX review outcome' : 'If interface work was added, screenshot evidence and UI/UX review were added before passing'}
+${supportModules.length ? supportModules.map((module) => `- [ ] ${module.folder} was reviewed if this phase touched ${module.reason.toLowerCase()}`).join('\n') : ''}
 
 ## Commands expected to run
-- [ ] Phase-specific tests from TEST_PLAN.md
+${phase.phaseType === 'implementation'
+    ? `- [ ] Phase-specific tests from TEST_PLAN.md
 - [ ] Lint or typecheck if applicable
 - [ ] Smoke test or regression check
-- [ ] Build verification if build files exist
+- [ ] Build verification if build files exist`
+    : `- [ ] Inspection or review steps from TEST_PLAN.md
+- [ ] Scenario checks or artifact review notes
+- [ ] Regression or continuity review if this phase depends on earlier outputs
+- [ ] Explicit note if a command was not relevant for this planning phase`}
 
 ## Files expected to change
 - [ ] phases/${phase.slug}/HANDOFF_SUMMARY.md
-- [ ] phases/${phase.slug}/EXIT_GATE.md (if exit criteria changed)
 - [ ] phases/${phase.slug}/VERIFICATION_REPORT.md
-- [ ] phases/${phase.slug}/EVIDENCE_CHECKLIST.md
-- [ ] repo/xelera-state.json
-- Implementation files specific to this phase
+- [ ] phases/${phase.slug}/NEXT_PHASE_CONTEXT.md
+${phase.repoTargets.map((item) => `- [ ] ${item}`).join('\n')}
 
 ## Acceptable evidence
+${phase.evidenceExamples.map((item) => `- ${item}`).join('\n')}
 - Markdown verification report with explicit result and recommendation
-- Test output logs or screenshots
-- Commit history or file diff
-- Updated handoff summary
-- Checked evidence checklist
 
 ## Unacceptable evidence
 - Vague claims without file references
+- Generic phrases like "looks good", "reviewed", "complete", or "ready to proceed" without concrete proof
 - Chat history or informal notes
 - Untested code
 - Missing verification report
@@ -1666,7 +3931,7 @@ function buildRootAgentStart(
   return `# ${agentName.toUpperCase()} START HERE
 
 ## What this file is for
-Open this file first if you want to use ${agentName} on this package.
+Open this file first if you want to use ${agentName} on this package. This file is mainly for the AI-agent working session, not for the novice business user overview.
 
 ## Package
 ${input.productName}
@@ -1686,29 +3951,33 @@ ${
 }
 
 ## Read these first
-1. START_HERE.md
-2. 00_PROJECT_CONTEXT.md
-3. 01_CONTEXT_RULES.md
-4. ${usageFile}
-5. 00_APPROVAL_GATE.md
-6. PROJECT_BRIEF.md
-7. PHASE_PLAN.md
-8. repo/manifest.json
-9. repo/xelera-state.json
-${agentName === 'OpenCode' ? `10. AGENTS.md
+1. BUSINESS_USER_START_HERE.md
+2. CURRENT_STATUS.md
+3. START_HERE.md
+4. 00_PROJECT_CONTEXT.md
+5. 01_CONTEXT_RULES.md
+6. ${usageFile}
+7. 00_APPROVAL_GATE.md
+8. PROJECT_BRIEF.md
+9. PHASE_PLAN.md
+10. repo/manifest.json
+11. repo/xelera-state.json
+${agentName === 'OpenCode' ? `12. AGENTS.md
 ` : ''}
 
 ## Start with phase
 Phase ${String(bundle.phases[0]?.index || 1).padStart(2, '0')} - ${bundle.phases[0]?.name || 'Initial phase'}
 
 ## What to paste into ${agentName}
-Open ${promptFile} and paste its prompt into ${agentName}. Then give ${agentName} the files listed in that prompt.
+Open COPY_PASTE_PROMPTS.md first if the user wants the simplified ordered prompts. Then open ${promptFile} and paste its prompt into ${agentName}. Give ${agentName} the files listed in that prompt.
 
 ## What you should do next
 1. Open the current phase folder.
 2. Give ${agentName} the matching phase files.
-3. Ask ${agentName} to stay inside the current phase only.
-4. Stop and verify before trying to advance.
+3. ${context.uiRelevant ? 'Open /ui-ux/UI_UX_START_HERE.md before building any interface screens and keep Screen and Workflow Review active during UI work.' : 'Use the lightweight /ui-ux/ folder only if a future phase adds a real interface.'}
+4. Ask ${agentName} to stay inside the current phase only.
+5. Run the Improve Until Good Enough Loop from /recursive-test/ only after a major build milestone. It improves quality; it does not replace normal regression tests.
+6. Stop and verify before trying to advance.
 
 ## Expected result
 - ${agentName} should restate the current phase, confirm the gate, work only within the current phase scope, run tests, and return a short handoff summary before you continue.
@@ -1723,20 +3992,37 @@ Open ${promptFile} and paste its prompt into ${agentName}. Then give ${agentName
 function buildPackageStartHere(bundle: ProjectBundle, input: ProjectInput) {
   const firstPhase = bundle.phases[0];
   const packageFolder = `./${bundle.exportRoot}`;
+  const context = buildContext(input);
+  const moduleEntries = getFriendlyModuleEntries(input, context);
   return `# START_HERE
 
 ## What this package is
 This is a local, markdown-first Xelera Method workspace. It is meant to help you plan, verify, hand off, and resume work without depending on hidden chat history.
 
+## Important beginner note
+You do not need to open every folder. Start with the guided files and the current phase only.
+
+## Why there are extra support folders
+- The folders under /product-strategy/, /requirements/, /security-risk/, /integrations/, and /architecture/ are guardrails for the AI agent.
+- In the beginner journey, they are folded into Decide and Plan so you are not managing extra stages.
+- Open them directly only when the step-by-step guide or copy-paste prompts tell you to.
+
 ## Open these files first
-1. README.md
-2. QUICKSTART.md
-3. 00_PROJECT_CONTEXT.md
-4. 01_CONTEXT_RULES.md
-5. 00_APPROVAL_GATE.md
-6. PROJECT_BRIEF.md
-7. PHASE_PLAN.md
-8. CODEX_START_HERE.md, CLAUDE_START_HERE.md, or OPENCODE_START_HERE.md
+1. BUSINESS_USER_START_HERE.md
+2. CURRENT_STATUS.md
+3. STEP_BY_STEP_BUILD_GUIDE.md
+4. COPY_PASTE_PROMPTS.md
+5. WHAT_TO_IGNORE_FOR_NOW.md
+6. README.md
+7. QUICKSTART.md
+8. 00_PROJECT_CONTEXT.md
+9. 01_CONTEXT_RULES.md
+10. 00_APPROVAL_GATE.md
+11. PROJECT_BRIEF.md
+12. PHASE_PLAN.md
+13. ${context.uiRelevant ? 'ui-ux/UI_UX_START_HERE.md for Screen and Workflow Review' : 'ui-ux/UI_UX_START_HERE.md if a later phase adds interface work'}
+14. recursive-test/RECURSIVE_TEST_START_HERE.md for the Improve Until Good Enough Loop
+15. CODEX_START_HERE.md, CLAUDE_START_HERE.md, or OPENCODE_START_HERE.md
 
 ## Current phase
 Phase ${String(firstPhase?.index || 1).padStart(2, '0')} - ${firstPhase?.name || 'Initial phase'}
@@ -1759,16 +4045,30 @@ ${
 - Entry gate: the checklist that must be true before you start work in a phase.
 - Exit gate: the checklist that must be true before you call the phase complete.
 - Evidence: the real files, test output, or notes you reviewed to justify your result and recommendation.
+- Screen and Workflow Review: the beginner-friendly name for the UI/UX module.
+- Improve Until Good Enough Loop: the beginner-friendly name for recursive testing.
 
 ## How to work this package
-1. Read the root context files and the current phase packet.
-2. Give the current phase files to Codex, Claude Code, or OpenCode.
-3. Complete or update VERIFICATION_REPORT.md and EVIDENCE_CHECKLIST.md.
-4. Run status and validate before trying to advance.
-5. Run next-phase only after the report says pass + proceed and the package is no longer blocked.
+1. Read BUSINESS_USER_START_HERE.md, CURRENT_STATUS.md, and the current phase packet.
+2. Use WHAT_TO_IGNORE_FOR_NOW.md so you do not open unnecessary folders.
+3. ${context.uiRelevant ? 'Use Screen and Workflow Review before and during UI implementation, including screenshot capture and critique before final testing.' : 'Keep the lightweight Screen and Workflow Review module on standby in case a future phase adds screens or forms.'}
+4. Give the current phase files to Codex, Claude Code, or OpenCode.
+5. Run or follow TEST_SCRIPT.md before completing verification.
+6. Record test results in TEST_RESULTS.md.
+7. Complete or update VERIFICATION_REPORT.md and EVIDENCE_CHECKLIST.md.
+8. Run Retest Previous Problems from /regression-suite/RUN_REGRESSION.md after major phases.
+9. After a major build milestone, run the Improve Until Good Enough Loop from /recursive-test/. This is not a replacement for regression testing.
+10. Run status and validate before trying to advance.
+11. Run next-phase only after the report says pass + proceed and the package is no longer blocked.
 
 ## What you should do next
-Open QUICKSTART.md for the exact commands, then open the current phase folder and the matching agent start file. If the package is blocked, fix the blocker before trying to advance.
+Open CURRENT_STATUS.md for the next action, then open STEP_BY_STEP_BUILD_GUIDE.md and COPY_PASTE_PROMPTS.md. If the package is blocked, fix the blocker before trying to advance.
+
+## Friendly module names inside Decide and Plan
+${moduleEntries
+    .filter((entry) => ['Product Goal and Scope', 'What the App Must Do', 'Private Data and Safety Check', 'External Services and Setup', 'Technical Plan'].includes(entry.name))
+    .map((entry) => `- ${entry.name}: ${entry.folder}`)
+    .join('\n')}
 
 ## Commands to know
 - From the folder that contains this workspace:
@@ -1785,24 +4085,54 @@ QUICKSTART.md includes the same commands in one place.
 ## Resume and handoff
 - Yes, you can resume later. repo/xelera-state.json records the current phase and evidence details.
 - Yes, you can hand off between Codex, Claude Code, and OpenCode. Use the same markdown files as the source of truth and start with the matching *_START_HERE.md file.
+
+## Files for you vs files for the AI agent
+- Business-user files: BUSINESS_USER_START_HERE.md, CURRENT_STATUS.md, STEP_BY_STEP_BUILD_GUIDE.md, COPY_PASTE_PROMPTS.md, MODULE_MAP.md, WHAT_TO_IGNORE_FOR_NOW.md, FINAL_CHECKLIST.md
+- Shared files: PROJECT_BRIEF.md, PHASE_PLAN.md, TESTING_STRATEGY.md, REGRESSION_TEST_PLAN.md, current phase files
+- AI-agent files: CODEX_START_HERE.md, CLAUDE_START_HERE.md, OPENCODE_START_HERE.md, build prompt files, handoff prompt files
 `;
 }
 
 function buildRootReadme(bundle: ProjectBundle, input: ProjectInput) {
+  const context = buildContext(input);
+  const moduleEntries = getFriendlyModuleEntries(input, context);
   return `# ${input.productName}
 
 ## What this package is
 This is a local Xelera Method workspace. It is a markdown package that helps you plan the work, check each phase, record evidence, and hand the project between Codex, Claude Code, and OpenCode without relying on hidden chat history.
 
+## Business-user shortcut
+- Open BUSINESS_USER_START_HERE.md first.
+- You do not need to open every folder.
+- Use MODULE_MAP.md and WHAT_TO_IGNORE_FOR_NOW.md to stay focused on the current step.
+- The AI agent uses the detailed support folders as guardrails. Most business users should stay in the guided journey.
+
 ## Open these files first
+- [BUSINESS_USER_START_HERE.md](BUSINESS_USER_START_HERE.md)
 - [START_HERE.md](START_HERE.md)
 - [QUICKSTART.md](QUICKSTART.md)
 - [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
+- [CURRENT_STATUS.md](CURRENT_STATUS.md)
 
 ## Main planning files
 - [PROJECT_BRIEF.md](PROJECT_BRIEF.md)
 - [PHASE_PLAN.md](PHASE_PLAN.md)
 - [00_APPROVAL_GATE.md](00_APPROVAL_GATE.md)
+- [STEP_BY_STEP_BUILD_GUIDE.md](STEP_BY_STEP_BUILD_GUIDE.md)
+- [COPY_PASTE_PROMPTS.md](COPY_PASTE_PROMPTS.md)
+- [MODULE_MAP.md](MODULE_MAP.md)
+- [FINAL_CHECKLIST.md](FINAL_CHECKLIST.md)
+
+## Decide and Plan support folders
+- /product-strategy/ = Product Goal and Scope
+- /requirements/ = What the App Must Do
+- /security-risk/ = Private Data and Safety Check
+- /integrations/ = External Services and Setup
+- /architecture/ = Technical Plan
+
+## Quality modules
+- [ui-ux/UI_UX_START_HERE.md](ui-ux/UI_UX_START_HERE.md)${context.uiRelevant ? ' for Screen and Workflow Review before and during interface work.' : ' for lightweight future Screen and Workflow Review if a user-facing experience is added later.'}
+- [recursive-test/RECURSIVE_TEST_START_HERE.md](recursive-test/RECURSIVE_TEST_START_HERE.md) for the Improve Until Good Enough Loop after major build completion.
 
 ## Agent start files
 - [CODEX_START_HERE.md](CODEX_START_HERE.md)
@@ -1813,15 +4143,381 @@ This is a local Xelera Method workspace. It is a markdown package that helps you
 ${bundle.lifecycleStatus}
 
 ## What you should do next
-1. Read START_HERE.md for the big picture.
+1. Read BUSINESS_USER_START_HERE.md for the big picture in plain English.
 2. Open QUICKSTART.md for the exact commands.
-3. Open the current phase files before asking an agent to do any work.
+3. ${context.uiRelevant ? 'Open the Screen and Workflow Review module before interface implementation and review screenshots before final testing.' : 'Keep the Screen and Workflow Review module available if a later phase adds interface work.'}
+4. Open the current phase files before asking an agent to do any work.
+`;
+}
+
+function buildBusinessUserStartHere(bundle: ProjectBundle, input: ProjectInput) {
+  const context = buildContext(input);
+  const firstPhase = bundle.phases[0];
+
+  return `# BUSINESS_USER_START_HERE
+
+## Open this first
+If you are a business user, this is the first file to open.
+
+## Good news
+- You do not need to open every folder.
+- You do not need to read every markdown file.
+- You only need the guided files for the current step.
+- The guided files are meant to stay in plain English.
+
+## What to open in order
+1. CURRENT_STATUS.md
+2. STEP_BY_STEP_BUILD_GUIDE.md
+3. COPY_PASTE_PROMPTS.md
+4. MODULE_MAP.md
+5. WHAT_TO_IGNORE_FOR_NOW.md
+6. START_HERE.md
+7. ${context.uiRelevant ? 'ui-ux/UI_UX_START_HERE.md if you are reviewing screens or workflows' : 'ui-ux/UI_UX_START_HERE.md only if the project later adds screens or forms'}
+8. recursive-test/RECURSIVE_TEST_START_HERE.md only after a major build milestone
+9. CODEX_START_HERE.md or CLAUDE_START_HERE.md only when you are about to use an AI agent
+
+## What these files are for
+- For you: BUSINESS_USER_START_HERE.md, CURRENT_STATUS.md, STEP_BY_STEP_BUILD_GUIDE.md, COPY_PASTE_PROMPTS.md, MODULE_MAP.md, WHAT_TO_IGNORE_FOR_NOW.md, FINAL_CHECKLIST.md
+- For both you and the AI agent: PROJECT_BRIEF.md, PHASE_PLAN.md, TESTING_STRATEGY.md, REGRESSION_TEST_PLAN.md, the current phase folder
+- Mostly for the AI agent: CODEX_START_HERE.md, CLAUDE_START_HERE.md, OPENCODE_START_HERE.md, CODEX_HANDOFF_PROMPT.md, CLAUDE_HANDOFF_PROMPT.md, OPENCODE_HANDOFF_PROMPT.md
+
+## Answers to the common beginner questions
+1. What do I open first?
+- Open CURRENT_STATUS.md, then STEP_BY_STEP_BUILD_GUIDE.md.
+
+2. What do I do next?
+- Follow the next action in CURRENT_STATUS.md and paste the matching prompt from COPY_PASTE_PROMPTS.md.
+
+3. What should I ignore for now?
+- Most folders outside the current phase, regression-suite, and deep agent files. WHAT_TO_IGNORE_FOR_NOW.md spells this out.
+
+4. Which files are for me vs. which files are for the AI agent?
+- MODULE_MAP.md and the list above separate business-user files from agent-facing files.
+
+5. When do I use Screen and Workflow Review?
+- Use it before or during any screen, form, dashboard, portal, or other interface work.
+
+6. When do I use the Improve Until Good Enough Loop?
+- Use it after a major build milestone when normal testing passes but quality still needs to be pushed higher.
+
+7. When do I stop and fix something?
+- Stop when a gate fails, a required file is still pending, evidence is missing, screenshots are missing for UI work, tests fail, or the recommendation says revise or blocked.
+
+8. When can I safely continue?
+- Continue only when the current gate says pass, the recommendation says proceed, the evidence is real, and CURRENT_STATUS.md shows no blocker that still applies.
+
+9. How do I know the project is done?
+- The final checklist is complete, the final handoff is ready, the required tests pass, and the package can explain what was built and what remains deferred.
+
+10. What score or gate result means pass or fail?
+- Pass means the phase result is pass and the recommendation is proceed.
+- Fail means the phase result is fail, blocked, revise, or still pending.
+- The Improve Until Good Enough Loop targets 90/100 by default and does not allow PASS below that final gate.
+
+## Current starting point
+- Current phase: Phase ${String(firstPhase?.index || 1).padStart(2, '0')} - ${firstPhase?.name || 'Initial phase'}
+- Current package status: ${bundle.lifecycleStatus}
+- Primary audience: ${context.primaryAudience}
+- Main focus: ${context.primaryFeature}
+
+## Plain-English names used in this package
+- Product Goal and Scope = Product strategy support folder used during Decide
+- What the App Must Do = Requirements support folder used during Decide
+- Private Data and Safety Check = Security-related checks used during Plan
+- External Services and Setup = Integration-related checks used during Plan
+- Technical Plan = Architecture support folder used during Plan
+- Screen and Workflow Review = UI/UX module
+- Improve Until Good Enough Loop = Recursive Test module
+- Retest Previous Problems = Regression suite
+`;
+}
+
+function buildModuleMap(input: ProjectInput, context: ProjectContext) {
+  const moduleEntries = getFriendlyModuleEntries(input, context);
+  const byStatus = (status: string) => moduleEntries.filter((entry) => entry.status === status);
+  return `# MODULE_MAP
+
+## How to use this file
+Use this map when you want to know what is required now, what is helpful later, and what you can safely ignore for now.
+
+## Required
+${byStatus('Required').map((entry) => `- ${entry.name} (${entry.folder}): ${entry.reason}`).join('\n')}
+
+## Recommended
+${byStatus('Recommended').map((entry) => `- ${entry.name} (${entry.folder}): ${entry.reason}`).join('\n') || '- No recommended-only modules were inferred.'}
+
+## Optional
+${byStatus('Optional').map((entry) => `- ${entry.name} (${entry.folder}): ${entry.reason}`).join('\n') || '- No optional modules were inferred.'}
+
+## Not needed now
+- Hosted UI: specifically out of scope for the current MVP.
+- Database: specifically out of scope for the current MVP.
+- Auth: specifically out of scope for the current MVP.
+- Analytics, deployment, operations, demo, and compliance modules: not needed now.
+- Past or future phase folders you are not currently working.
+
+## Guided files first
+- BUSINESS_USER_START_HERE.md: first file for a novice business user
+- CURRENT_STATUS.md: current stage, gate, next action, blockers, and score target
+- STEP_BY_STEP_BUILD_GUIDE.md: the full guided workflow from Decide to Handoff
+- COPY_PASTE_PROMPTS.md: main prompts in order
+- START_HERE.md: package overview and command references
+- WHAT_TO_IGNORE_FOR_NOW.md: helps reduce overwhelm
+- FINAL_CHECKLIST.md: plain-English done check
+- PROJECT_BRIEF.md and PHASE_PLAN.md: shared context for both you and the AI agent
+
+## File audience guide
+- Business-user first: BUSINESS_USER_START_HERE.md, CURRENT_STATUS.md, STEP_BY_STEP_BUILD_GUIDE.md, COPY_PASTE_PROMPTS.md, MODULE_MAP.md, WHAT_TO_IGNORE_FOR_NOW.md, FINAL_CHECKLIST.md
+- Shared with the AI agent: PROJECT_BRIEF.md, PHASE_PLAN.md, TESTING_STRATEGY.md, current phase packet, the Decide and Plan support folders when relevant, Screen and Workflow Review files, Improve Until Good Enough Loop files
+- AI-agent first: CODEX_START_HERE.md, CLAUDE_START_HERE.md, OPENCODE_START_HERE.md, phase build prompts, agent handoff prompts
+`;
+}
+
+function buildWhatToIgnoreForNow(bundle: ProjectBundle, input: ProjectInput, context: ProjectContext) {
+  const laterPhases = bundle.phases.slice(1).map((phase) => `- phases/${phase.slug}/ until Phase ${String(phase.index).padStart(2, '0')} becomes current`).join('\n');
+
+  return `# WHAT_TO_IGNORE_FOR_NOW
+
+## Why this file exists
+Novice users often assume they need to open everything. You do not.
+
+## Safe to ignore right now
+- Most folders outside the current phase
+- The deeper Decide and Plan support folders unless the guide or prompt tells you to use them
+- Deep regression-suite scripts until you are testing
+- Agent-specific prompt files until you are about to paste one into an AI tool
+- repo/manifest.json and repo/xelera-state.json unless someone asks for technical debugging
+${context.uiRelevant ? '- Screen and Workflow Review details that are not needed for the current build step once the current UI question is answered' : '- The full Screen and Workflow Review folder unless a real interface appears'}
+- The Improve Until Good Enough Loop until a major build milestone is complete
+
+## Usually ignore these until later
+${laterPhases || '- No later phases exist yet.'}
+
+## Open these instead
+1. CURRENT_STATUS.md
+2. STEP_BY_STEP_BUILD_GUIDE.md
+3. COPY_PASTE_PROMPTS.md
+4. PROJECT_BRIEF.md
+5. The current phase folder
+
+## Stop ignoring these when
+- Product direction is fuzzy or the MVP keeps growing
+- Then open /product-strategy/ and /requirements/.
+- A phase touches private data, safety, external services, or technical boundaries
+- Then open /security-risk/, /integrations/, or /architecture/ as directed by the phase packet.
+- A screen, form, dashboard, or workflow needs review
+${context.uiRelevant ? '- Then open ui-ux/UI_UX_START_HERE.md for Screen and Workflow Review.' : '- Then open ui-ux/UI_UX_START_HERE.md and activate Screen and Workflow Review.'}
+- A major build milestone is complete and quality still feels shaky
+- Then open recursive-test/RECURSIVE_TEST_START_HERE.md for the Improve Until Good Enough Loop.
+- A test fails or a gate says blocked
+- Then open the exact gate, test, or verification file named in CURRENT_STATUS.md or status output.
+`;
+}
+
+function buildCurrentStatus(bundle: ProjectBundle, input: ProjectInput, context: ProjectContext) {
+  const firstPhase = bundle.phases[0];
+  const blockerLines = bundle.blockingWarnings.slice(0, 5).map((warning) => `- ${warning.title}: ${warning.message}`).join('\n');
+
+  return `# CURRENT_STATUS
+
+## Current stage
+- Decide
+
+## Current phase
+- Phase ${String(firstPhase?.index || 1).padStart(2, '0')} - ${firstPhase?.name || 'Initial phase'}
+
+## Current gate
+- Entry gate for the current phase
+
+## Next action
+- Read PROJECT_BRIEF.md and STEP_BY_STEP_BUILD_GUIDE.md, then paste the Decide prompt from COPY_PASTE_PROMPTS.md.
+- In Decide, confirm Product Goal and Scope plus What the App Must Do before trying to plan the build.
+
+## Known blockers
+${blockerLines || '- No blocking warnings recorded at generation time.'}
+
+## Quality score target
+- Package readiness target: clear pass + proceed evidence for each phase
+- Improve Until Good Enough Loop target after major build completion: 90/100
+
+## Screen and Workflow Review
+- ${context.uiRelevant ? 'Expected during design and interface build work.' : 'Not needed now unless interface work appears.'}
+
+## Decide and Plan support folders
+- Decide uses Product Goal and Scope plus What the App Must Do.
+- Plan uses Technical Plan, Private Data and Safety Check, and External Services and Setup only when relevant.
+
+## Improve Until Good Enough Loop
+- Has recursive testing run yet? No
+- Run it only after a major build milestone and after normal testing plus Retest Previous Problems.
+
+## Safe continue rule
+- Continue only when the current gate is satisfied, required evidence exists, and the recommendation is proceed.
+
+## Safe stop rule
+- Stop when a test fails, a gate says blocked, a key file still says pending, or evidence is weak.
+
+## Helpful command
+- Check live package status any time with \`npm run status -- --package=.\`
+`;
+}
+
+function buildCopyPastePrompts(input: ProjectInput, bundle: ProjectBundle, context: ProjectContext) {
+  const firstPhase = bundle.phases[0];
+
+  return `# COPY_PASTE_PROMPTS
+
+## How to use this file
+These are the main prompts in order. Use them so you do not have to hunt through folders.
+
+## 1. Decide
+\`\`\`text
+Read BUSINESS_USER_START_HERE.md, CURRENT_STATUS.md, PROJECT_BRIEF.md, QUESTIONNAIRE.md, and PLAN_CRITIQUE.md.
+Tell me in plain English:
+1. what this project is trying to do
+2. what I should decide now
+3. what I can ignore for now
+4. whether the idea is clear enough to continue
+5. what blockers or unanswered questions must be fixed first
+\`\`\`
+
+### Confirm Product Goal and Scope
+\`\`\`text
+Read product-strategy/PRODUCT_NORTH_STAR.md, product-strategy/MVP_SCOPE.md, product-strategy/OUT_OF_SCOPE.md, and product-strategy/PRODUCT_STRATEGY_GATE.md.
+Use evidence from those files only.
+Tell me:
+1. the plain-English product goal
+2. who the target user is
+3. what stays in the MVP
+4. what is explicitly out of scope
+5. whether the evidence is strong enough to continue
+Refuse to proceed if the target user, MVP scope, out-of-scope list, or success criteria are missing or contradictory.
+\`\`\`
+
+### Confirm What the App Must Do
+\`\`\`text
+Read requirements/FUNCTIONAL_REQUIREMENTS.md, requirements/NON_FUNCTIONAL_REQUIREMENTS.md, requirements/ACCEPTANCE_CRITERIA.md, and requirements/REQUIREMENTS_GATE.md.
+Use evidence from those files only.
+Tell me:
+1. the core workflow requirements
+2. the important non-functional expectations
+3. the acceptance checks that must pass
+4. the open questions blocking build work
+5. whether the requirements are clear enough to continue
+Refuse to proceed if acceptance criteria are missing, generic, contradictory, or not testable.
+\`\`\`
+
+## 2. Plan
+\`\`\`text
+Read PROJECT_BRIEF.md, PHASE_PLAN.md, SCORECARD.md, and 00_APPROVAL_GATE.md.
+Turn this into a simple plan for a novice business user:
+1. what happens first
+2. what happens next
+3. where I must stop for approval or evidence
+4. what counts as pass or fail
+5. what the next safe action is
+\`\`\`
+
+### Review Technical Plan
+\`\`\`text
+Read architecture/SYSTEM_OVERVIEW.md, architecture/DATA_MODEL.md, architecture/API_CONTRACTS.md, architecture/STATE_MANAGEMENT.md, and architecture/ARCHITECTURE_GATE.md.
+Use evidence from those files only.
+Summarize the technical plan in plain English and tell me whether it is small enough for the MVP.
+Refuse to proceed if API boundaries are unclear, state handling is missing, the data model is missing for a data-heavy project, or the architecture is more complex than the MVP requires.
+\`\`\`
+
+### Review Private Data and Safety
+\`\`\`text
+Read security-risk/DATA_CLASSIFICATION.md, security-risk/SECRET_MANAGEMENT.md, security-risk/PRIVACY_RISK_REVIEW.md, security-risk/AUTHORIZATION_REVIEW.md, and security-risk/SECURITY_GATE.md.
+Use evidence from those files only.
+Tell me the main private-data, secret, permission, and dependency risks in plain English.
+Refuse to proceed if roles are unclear, private data has no clear purpose, secrets are not handled safely, or expert review is clearly needed and not flagged.
+\`\`\`
+
+### Review External Services and Setup
+\`\`\`text
+Read integrations/EXTERNAL_SERVICES.md, integrations/API_KEYS_AND_SECRETS.md, integrations/ENVIRONMENT_VARIABLES.md, integrations/MOCKING_STRATEGY.md, integrations/INTEGRATION_TEST_PLAN.md, and integrations/INTEGRATION_GATE.md.
+Use evidence from those files only.
+Tell me which outside services are truly required now, what can stay mocked, and what setup a builder needs.
+Refuse to proceed if required services are unclear, environment variables are undocumented, the app cannot run locally without an unavailable service, or mock strategy is missing.
+\`\`\`
+
+## 3. Design
+\`\`\`text
+Read the current phase folder, especially PHASE_BRIEF.md and TEST_PLAN.md.
+${context.uiRelevant ? 'Also read ui-ux/UI_UX_START_HERE.md, USER_WORKFLOWS.md, and SCREEN_INVENTORY.md for Screen and Workflow Review.' : 'If interface work appears, also activate ui-ux/UI_UX_START_HERE.md for Screen and Workflow Review.'}
+Restate the design in plain English, list the user workflow, list missing states or risks, and tell me what must be true before building starts.
+\`\`\`
+
+## 4. Build
+\`\`\`text
+Read ${firstPhase ? `phases/${firstPhase.slug}/PHASE_BRIEF.md` : 'the current phase PHASE_BRIEF.md'}, ${firstPhase ? `phases/${firstPhase.slug}/TEST_PLAN.md` : 'the current phase TEST_PLAN.md'}, and ${firstPhase ? `phases/${firstPhase.slug}/CODEX_BUILD_PROMPT.md` : 'the current phase build prompt'}.
+Implement only the current phase scope.
+Do not skip gates, do not expand scope, and tell me which files changed.
+\`\`\`
+
+## 5. Test
+\`\`\`text
+Read TESTING_STRATEGY.md, ${firstPhase ? `phases/${firstPhase.slug}/TEST_SCRIPT.md` : 'the current phase TEST_SCRIPT.md'}, ${firstPhase ? `phases/${firstPhase.slug}/TEST_RESULTS.md` : 'the current phase TEST_RESULTS.md'}, and regression-suite/RUN_REGRESSION.md.
+${context.uiRelevant ? 'If UI changed, also run Screen and Workflow Review with ui-ux/SCREENSHOT_REVIEW_PROMPT.md and ui-ux/UI_UX_GATE.md.' : 'If UI appeared, also activate Screen and Workflow Review.'}
+Tell me what passed, what failed, what evidence exists, when I must stop, and when I can safely continue.
+\`\`\`
+
+## 6. Handoff
+\`\`\`text
+Read VERIFICATION_REPORT.md, EVIDENCE_CHECKLIST.md, HANDOFF_SUMMARY.md, NEXT_PHASE_CONTEXT.md, CURRENT_STATUS.md, and FINAL_CHECKLIST.md.
+Tell me:
+1. whether this phase is pass or fail
+2. whether the recommendation is proceed, revise, or blocked
+3. what the next person needs to know
+4. whether the package is ready to continue
+5. whether the project is done or still has deferred work
+\`\`\`
+
+## 7. Improve Until Good Enough Loop
+\`\`\`text
+After a major build milestone, read recursive-test/RECURSIVE_TEST_START_HERE.md, recursive-test/RECURSIVE_TEST_PROMPT.md, recursive-test/SCORING_RUBRIC.md, and recursive-test/RECURSIVE_TEST_REPORT.md.
+Run the Improve Until Good Enough Loop.
+Score each use case from 0 to 100, fix root causes, rerun tests, and stop only when the overall score is at least 90 or a clear blocker remains.
+\`\`\`
+`;
+}
+
+function buildFinalChecklist(bundle: ProjectBundle, input: ProjectInput, context: ProjectContext) {
+  return `# FINAL_CHECKLIST
+
+## Before you call this project done
+- [ ] I know what the app is supposed to do.
+- [ ] Product Goal and Scope and What the App Must Do are still consistent with the final result.
+- [ ] The current phase says pass.
+- [ ] The recommendation says proceed.
+- [ ] The evidence files are real and not still pending.
+- [ ] The tests were actually run and recorded.
+- [ ] Retest Previous Problems was run.
+- [ ] ${context.uiRelevant ? 'Screen and Workflow Review was completed for UI work.' : 'If UI was added, Screen and Workflow Review was completed.'}
+- [ ] The Improve Until Good Enough Loop was run if major quality improvements were needed.
+- [ ] I can explain which files are for me and which are for the AI agent.
+- [ ] I can explain what was deferred on purpose.
+- [ ] I know the next safe step.
+
+## Done means
+- The package is understandable by a new person.
+- The gates and evidence agree.
+- The project can continue without hidden chat context.
+- The handoff is honest about what is complete, what is deferred, and what still needs care.
+
+## Do not call it done if
+- A key file still says pending.
+- A gate says blocked or revise.
+- Test evidence is weak or missing.
+- The package feels understandable only if someone explains it in chat.
 `;
 }
 
 function buildPackageQuickstart(bundle: ProjectBundle, input: ProjectInput) {
   const firstPhase = bundle.phases[0];
   const packageFolder = `./${bundle.exportRoot}`;
+  const context = buildContext(input);
 
   return `# QUICKSTART
 
@@ -1843,12 +4539,16 @@ Use this file when you want the shortest path from package creation to phase wor
 2. START_HERE.md
 3. PROJECT_BRIEF.md
 4. PHASE_PLAN.md
-5. CODEX_START_HERE.md, CLAUDE_START_HERE.md, or OPENCODE_START_HERE.md
+5. ${context.uiRelevant ? 'ui-ux/UI_UX_START_HERE.md' : 'ui-ux/UI_UX_START_HERE.md if interface work appears'}
+6. recursive-test/RECURSIVE_TEST_START_HERE.md
+7. CODEX_START_HERE.md, CLAUDE_START_HERE.md, or OPENCODE_START_HERE.md
 
 ## What you should do next
 1. Read the current phase brief.
-2. Give the matching phase files to your coding agent.
-3. Stop and fill out verification before trying to advance.
+2. ${context.uiRelevant ? 'If you are building UI, define workflows and screens before writing interface code and capture screenshots during the build.' : 'If a future phase adds UI, stop and use the UI/UX folder before coding it.'}
+3. Give the matching phase files to your coding agent.
+4. Use recursive testing only after a major build milestone, not as a substitute for phase verification or regression testing.
+5. Stop and fill out verification before trying to advance.
 `;
 }
 
@@ -1889,6 +4589,1330 @@ Blocked does not mean the package is useless. It means you should stop trying to
 `;
 }
 
+function buildStepByStepGuide(
+  bundle: ProjectBundle,
+  input: ProjectInput,
+  context: ProjectContext,
+  statusSummary: string,
+  assumptionsAndQuestions: { assumptions: string[]; openQuestions: string[] },
+  modeGuideIntro: string
+) {
+  const firstPhase = bundle.phases[0];
+  const phasePath = `phases/${firstPhase?.slug || 'phase-01'}`;
+
+  return `# STEP_BY_STEP_BUILD_GUIDE
+
+## Package status
+${bundle.lifecycleStatus}
+
+${statusSummary}
+
+## What this guide is for
+This is the main guided workflow for a novice business user. Follow these six stages in order. You do not need to open every folder.
+
+## Important note about the extra folders
+- The AI agent uses /product-strategy/, /requirements/, /security-risk/, /integrations/, and /architecture/ as guardrails.
+- You do not need to open every one of those folders by default.
+- In the beginner journey, they are grouped into Decide and Plan.
+
+## Mode-specific guidance
+${modeGuideIntro}
+
+## Before you start
+- Open CURRENT_STATUS.md to see the current stage and next action.
+- Open COPY_PASTE_PROMPTS.md so you can paste the right prompt without hunting for files.
+- Open WHAT_TO_IGNORE_FOR_NOW.md so you stay focused on the current step.
+
+## 1. Decide
+### What this stage means
+Decide whether the idea is clear enough to move forward and what should stay in the first version.
+
+### What the user does
+- Read BUSINESS_USER_START_HERE.md, PROJECT_BRIEF.md, QUESTIONNAIRE.md, and PLAN_CRITIQUE.md.
+- Confirm what the app must do, what it must not do, and what still feels unclear.
+- Confirm Product Goal and Scope in /product-strategy/.
+- Confirm What the App Must Do in /requirements/.
+
+### What prompt to paste
+- Use the Decide prompt in COPY_PASTE_PROMPTS.md.
+
+### What file gets updated
+- PROJECT_BRIEF.md
+- QUESTIONNAIRE.md
+- PLAN_CRITIQUE.md if follow-up questions are answered
+- /product-strategy/ files
+- /requirements/ files
+
+### What evidence is required
+- Clear answers to the key project questions
+- No hidden assumptions about scope or audience
+- A visible MVP scope and out-of-scope list
+- Acceptance criteria that can actually be tested
+
+### When to stop
+- Stop if the idea is still vague, blockers are unresolved, or the first version keeps expanding.
+
+### When to continue
+- Continue when the project goal, audience, scope cut, and biggest risks are understandable in plain English.
+
+## 2. Plan
+### What this stage means
+Turn the idea into a realistic path with phases, gates, and clear pass or fail decisions.
+
+### What the user does
+- Read PHASE_PLAN.md, SCORECARD.md, and 00_APPROVAL_GATE.md.
+- Confirm the order of work, the main gates, and what would block progress.
+- Use Technical Plan in /architecture/ to make sure the build path is simple enough for the MVP.
+- Use Private Data and Safety Check in /security-risk/ if the project touches private data, roles, trust, or permissions.
+- Use External Services and Setup in /integrations/ if the project needs outside services, API keys, webhooks, or mocks.
+
+### What prompt to paste
+- Use the Plan prompt in COPY_PASTE_PROMPTS.md.
+
+### What file gets updated
+- PHASE_PLAN.md
+- SCORECARD.md
+- 00_APPROVAL_GATE.md
+- /architecture/ files when technical boundaries need clarification
+- /security-risk/ files when data, roles, or secrets matter
+- /integrations/ files when external services or setup matter
+
+### What evidence is required
+- A phase order that makes sense
+- Blockers and risks named clearly
+- Pass or fail logic that is visible
+- Technical plan stays smaller than the MVP
+- Safety and integration setup are explicit when relevant
+
+### When to stop
+- Stop if the plan skips gates, hides risks, or asks the team to build before the problem is understood.
+
+### When to continue
+- Continue when the phase order, gate logic, and next safe step are clear.
+
+## 3. Design
+### What this stage means
+Describe how the product should work before building the current phase.
+
+### What the user does
+- Read ${phasePath}/PHASE_BRIEF.md and ${phasePath}/TEST_PLAN.md.
+- ${context.uiRelevant ? 'Use Screen and Workflow Review by opening ui-ux/UI_UX_START_HERE.md, USER_WORKFLOWS.md, and SCREEN_INVENTORY.md.' : 'If screens or forms appear, activate Screen and Workflow Review before continuing.'}
+
+### What prompt to paste
+- Use the Design prompt in COPY_PASTE_PROMPTS.md.
+
+### What file gets updated
+- ${phasePath}/PHASE_BRIEF.md
+- ${phasePath}/TEST_PLAN.md
+${context.uiRelevant ? `- ui-ux/USER_WORKFLOWS.md
+- ui-ux/SCREEN_INVENTORY.md` : `- ui-ux/USER_WORKFLOWS.md only if interface work appears
+- ui-ux/SCREEN_INVENTORY.md only if interface work appears`}
+
+### What evidence is required
+- A workflow that makes sense
+- Clear states, edge cases, and success conditions
+- ${context.uiRelevant ? 'Screen and workflow evidence for user-facing work' : 'A clear reason if no interface review is needed yet'}
+
+### When to stop
+- Stop if the workflow is confusing, the screens are missing key states, or the build would require guessing.
+
+### When to continue
+- Continue when the design is concrete enough that the builder can work without hidden chat context.
+
+## 4. Build
+### What this stage means
+Implement only the current phase scope.
+
+### What the user does
+- Give the current phase packet to the AI agent.
+- Keep the work inside the phase boundary.
+- Make sure changed files are captured in the handoff.
+
+### What prompt to paste
+- Use the Build prompt in COPY_PASTE_PROMPTS.md or the current phase build prompt file.
+
+### What file gets updated
+- ${phasePath}/CODEX_BUILD_PROMPT.md, ${phasePath}/CLAUDE_BUILD_PROMPT.md, or ${phasePath}/OPENCODE_BUILD_PROMPT.md
+- ${phasePath}/HANDOFF_SUMMARY.md
+- The actual repo files being changed
+
+### What evidence is required
+- Real changed files
+- A build or implementation result tied to the current phase
+- A handoff that says what changed
+
+### When to stop
+- Stop if the AI agent expands scope, skips required files, or changes things outside the current phase without justification.
+
+### When to continue
+- Continue when the current phase deliverables exist and the work can be tested.
+
+## 5. Test
+### What this stage means
+Prove the work actually works and is safe to move forward.
+
+### What the user does
+- Run or follow ${phasePath}/TEST_SCRIPT.md.
+- Record results in ${phasePath}/TEST_RESULTS.md.
+- Run Retest Previous Problems from regression-suite/RUN_REGRESSION.md.
+- ${context.uiRelevant ? 'If UI changed, run Screen and Workflow Review with screenshots and complete ui-ux/UI_UX_GATE.md.' : 'If UI appeared, stop and run Screen and Workflow Review before broader testing.'}
+- After a major build milestone, run the Improve Until Good Enough Loop from recursive-test/ only if quality still needs to be pushed higher.
+
+### What prompt to paste
+- Use the Test prompt in COPY_PASTE_PROMPTS.md.
+
+### What file gets updated
+- ${phasePath}/TEST_RESULTS.md
+- ${phasePath}/VERIFICATION_REPORT.md
+- ${phasePath}/EVIDENCE_CHECKLIST.md
+- regression-suite/REGRESSION_RESULTS_TEMPLATE.md
+${context.uiRelevant ? '- ui-ux/UI_UX_HANDOFF.md and ui-ux/UI_UX_GATE.md' : '- ui-ux/UI_UX_HANDOFF.md and ui-ux/UI_UX_GATE.md if interface work appears'}
+- recursive-test/ITERATION_LOG.md and recursive-test/RECURSIVE_TEST_REPORT.md when recursive testing runs
+
+### What evidence is required
+- Real test results
+- Real file references
+- Screenshot evidence for UI work
+- Regression evidence
+- A clear gate decision
+
+### When to stop
+- Stop if tests fail, evidence is weak, screenshots are missing for UI work, or the recommendation says revise or blocked.
+
+### When to continue
+- Continue when tests pass, evidence is real, the phase result is pass, and the recommendation is proceed.
+
+## 6. Handoff
+### What this stage means
+Package the truth so another person or AI agent can continue safely.
+
+### What the user does
+- Read VERIFICATION_REPORT.md, HANDOFF_SUMMARY.md, NEXT_PHASE_CONTEXT.md, CURRENT_STATUS.md, and FINAL_CHECKLIST.md.
+- Make sure the next builder can see what passed, what failed, what is deferred, and what to do next.
+
+### What prompt to paste
+- Use the Handoff prompt in COPY_PASTE_PROMPTS.md.
+
+### What file gets updated
+- ${phasePath}/HANDOFF_SUMMARY.md
+- ${phasePath}/NEXT_PHASE_CONTEXT.md
+- FINAL_CHECKLIST.md
+- CURRENT_STATUS.md if you are manually maintaining the beginner summary
+
+### What evidence is required
+- Final recommendation
+- Honest list of remaining blockers or deferrals
+- Clear next action for the next builder
+
+### When to stop
+- Stop if the handoff hides risk, skips evidence, or says the project is done when key work is still pending.
+
+### When to continue
+- Continue to the next phase only when the current handoff is complete. Call the project done only when FINAL_CHECKLIST.md is honestly complete.
+
+## UI/UX review timing
+- Use Screen and Workflow Review before and during interface implementation.
+- Run screenshot review before broader testing.
+- Do not skip UI_UX_GATE.md for UI work.
+
+## Recursive testing timing
+- Run the Improve Until Good Enough Loop after a major build completion or other major milestone.
+- Use /recursive-test/ as a quality-improvement loop after normal phase testing and Retest Previous Problems.
+- Do not treat recursive testing as a single command or as a replacement for the regression suite.
+
+## How to know pass or fail
+- Safe pass: TEST_RESULTS.md is complete, VERIFICATION_REPORT.md says result = pass, recommendation = proceed, and the evidence files are real.
+- Safe fail: result = fail, recommendation = revise or blocked, evidence is missing, or the tests were not actually run.
+
+## Assumptions and open questions
+### Assumptions
+${listToBullets(assumptionsAndQuestions.assumptions, 'Inferred assumption: none recorded.')}
+
+### Open questions
+${listToBullets(assumptionsAndQuestions.openQuestions, 'Please review and confirm: no open questions recorded.')}
+
+## Unresolved warnings
+${listToBullets(bundle.unresolvedWarnings.map((warning) => `[${warning.severity}] ${warning.title}: ${warning.message}`), 'No unresolved warnings recorded.')}
+
+## Status meaning
+- Draft: export is allowed for planning review, but the package is not yet ready for human build approval.
+- Blocked: export is allowed for diagnosis and review, but blocker warnings prevent a build-ready package.
+- ReviewReady: the package is complete enough for human approval review, but it is not yet approved for build.
+- ApprovedForBuild: the package has explicit approval metadata and can be treated as build-approved.
+`;
+}
+
+type UiWorkflow = {
+  name: string;
+  targetUser: string;
+  goal: string;
+  startPoint: string;
+  happyPath: string[];
+  edgeCases: string[];
+  failureCases: string[];
+  requiredScreens: string[];
+  successCriteria: string;
+  businessRisk: string;
+};
+
+type UiScreen = {
+  name: string;
+  purpose: string;
+  primaryUser: string;
+  primaryAction: string;
+  secondaryActions: string[];
+  requiredData: string[];
+  emptyState: string;
+  loadingState: string;
+  errorState: string;
+  mobileConsiderations: string;
+  accessibilityConsiderations: string;
+  implementationNotes: string;
+};
+
+function getUiWorkflowSet(input: ProjectInput, context: ProjectContext): UiWorkflow[] {
+  if (!context.uiRelevant) {
+    return [
+      {
+        name: 'Optional future interface review',
+        targetUser: context.primaryAudience,
+        goal: `Recognize when ${input.productName} later grows a user-facing surface that needs UI/UX planning.`,
+        startPoint: `A future phase adds a dashboard, form, workflow UI, website, or internal tool for ${input.productName}.`,
+        happyPath: [
+          'Notice that users will interact with screens instead of only markdown artifacts or CLI flows.',
+          'Open UI_UX_START_HERE.md before building the interface.',
+          'Create workflows and screens before implementation starts.'
+        ],
+        edgeCases: [
+          'A small admin page seems trivial, but still needs error states and access clarity.',
+          'A one-off settings page later becomes a recurring workflow for multiple roles.'
+        ],
+        failureCases: [
+          'An interface is built without documenting the user flow first.',
+          'Screens are added during a later phase with no screenshot review or mobile check.'
+        ],
+        requiredScreens: ['No current screens required. Add this list when a UI is introduced.'],
+        successCriteria: 'The team pauses before UI implementation and creates project-specific workflows and screens first.',
+        businessRisk: 'If a UI is added late without this module, the project can ship confusing screens that contradict the markdown workflow.'
+      }
+    ];
+  }
+
+  switch (context.domainArchetype) {
+    case 'family-task':
+      return [
+        {
+          name: 'Parent creates and assigns a task',
+          targetUser: 'Parent organizer',
+          goal: 'Create a household task quickly and assign it to the right child without confusion.',
+          startPoint: 'Parent opens the household dashboard.',
+          happyPath: [
+            'Parent sees today’s household snapshot and chooses Create task.',
+            'Parent enters task name, due date, assignee, and reward or priority details.',
+            'Parent reviews the assignment summary and confirms.',
+            'Child sees the task in their own limited task view.'
+          ],
+          edgeCases: ['Parent assigns the task to multiple children.', 'Parent creates a recurring chore instead of a one-time task.'],
+          failureCases: ['Assignee visibility is unclear.', 'Parent cannot tell whether the child has already completed the task.'],
+          requiredScreens: ['Household dashboard', 'Task creation form', 'Child task list', 'Task detail view'],
+          successCriteria: 'A parent can create and verify a task assignment in under two minutes without checking hidden admin settings.',
+          businessRisk: 'If assignment flow is confusing, parents stop trusting the system and revert to text messages or paper lists.'
+        },
+        {
+          name: 'Child completes a task',
+          targetUser: 'Child user',
+          goal: 'Mark a task complete with a clear success state and no access to parent-only controls.',
+          startPoint: 'Child opens their task list.',
+          happyPath: [
+            'Child sees only their tasks and the current status.',
+            'Child opens a task, completes it, and submits proof if required.',
+            'System confirms completion and shows what happens next.'
+          ],
+          edgeCases: ['Child completes the task offline and syncs later.', 'Task needs parent approval before rewards unlock.'],
+          failureCases: ['Completion state is ambiguous.', 'Child sees settings or notes meant only for parents.'],
+          requiredScreens: ['Child task list', 'Task detail view', 'Completion confirmation state'],
+          successCriteria: 'The child can finish a task without needing an adult to explain the next step.',
+          businessRisk: 'If the child flow is confusing, adoption collapses because the household routine becomes harder, not easier.'
+        },
+        {
+          name: 'Parent reviews progress and blockers',
+          targetUser: 'Parent organizer',
+          goal: 'Understand task progress quickly and spot missing or stuck tasks.',
+          startPoint: 'Parent returns to the dashboard later in the day.',
+          happyPath: [
+            'Parent sees status summaries for overdue, pending, and completed tasks.',
+            'Parent opens blocked items and follows the recommended next action.',
+            'Parent confirms the household plan is still on track.'
+          ],
+          edgeCases: ['Multiple children have overdue tasks.', 'A recurring task failed because no assignee was active.'],
+          failureCases: ['Dashboard hides the real blocker.', 'The primary action for fixing overdue work is unclear.'],
+          requiredScreens: ['Household dashboard', 'Task detail view', 'Notification or reminder panel'],
+          successCriteria: 'The parent can identify the next action for any blocked task within one screen.',
+          businessRisk: 'If progress is hard to read, the dashboard becomes decoration instead of an operating tool.'
+        }
+      ];
+    case 'restaurant-ordering':
+      return [
+        {
+          name: 'Customer places a pickup order',
+          targetUser: 'Restaurant customer',
+          goal: 'Place an order, confirm details, and understand pickup timing without calling the restaurant.',
+          startPoint: 'Customer opens the ordering experience.',
+          happyPath: [
+            'Customer browses the menu and adds items to cart.',
+            'Customer reviews modifiers, pickup time, and contact details.',
+            'Customer submits the order and sees a clear confirmation.'
+          ],
+          edgeCases: ['An item becomes unavailable mid-order.', 'Pickup timing changes because the kitchen is busy.'],
+          failureCases: ['Cart total is unclear.', 'Customer cannot tell whether the order was actually placed.'],
+          requiredScreens: ['Menu screen', 'Cart', 'Checkout form', 'Order confirmation'],
+          successCriteria: 'The customer can complete checkout confidently without staff intervention.',
+          businessRisk: 'Confusing ordering flow causes abandoned orders and duplicate support calls.'
+        },
+        {
+          name: 'Kitchen confirms and updates order state',
+          targetUser: 'Kitchen or operations staff',
+          goal: 'Move an order through preparation states without losing timing clarity.',
+          startPoint: 'Staff opens the kitchen queue.',
+          happyPath: [
+            'Staff sees new orders ordered by timing and urgency.',
+            'Staff marks order accepted, in progress, and ready.',
+            'Customer-facing state updates remain consistent.'
+          ],
+          edgeCases: ['A modification requires staff clarification.', 'Several rush orders arrive at once.'],
+          failureCases: ['Order state labels are too vague.', 'Queue layout hides overdue items.'],
+          requiredScreens: ['Kitchen queue', 'Order detail panel', 'Ready-for-pickup state'],
+          successCriteria: 'Staff can update order state in seconds without opening unrelated screens.',
+          businessRisk: 'If kitchen UI is confusing, service slows down and customers lose trust in timing estimates.'
+        },
+        {
+          name: 'Customer handles an issue or cancellation',
+          targetUser: 'Restaurant customer',
+          goal: 'Understand what to do when an order cannot continue as planned.',
+          startPoint: 'Customer sees a delay, error, or cancellation need.',
+          happyPath: [
+            'Customer opens order status.',
+            'System explains delay, cancellation policy, or next step in plain language.',
+            'Customer completes the safest available action.'
+          ],
+          edgeCases: ['Order was partially prepared.', 'Restaurant needs to offer a substitute item.'],
+          failureCases: ['Error copy is vague.', 'Customer loses confidence because there is no next step.'],
+          requiredScreens: ['Order status screen', 'Error state or support path', 'Cancellation confirmation'],
+          successCriteria: 'Issue states reduce confusion instead of escalating it.',
+          businessRisk: 'Poor exception handling creates refunds, bad reviews, and staff support burden.'
+        }
+      ];
+    default:
+      return [
+        {
+          name: `${sentenceCase(context.primaryFeature)} primary workflow`,
+          targetUser: context.primaryAudience,
+          goal: `Complete the main ${input.productName} workflow without needing hidden chat context or side-channel explanation.`,
+          startPoint: `User opens the first screen for ${input.productName}.`,
+          happyPath: [
+            `User understands the first decision on the page and starts the ${context.primaryFeature} workflow.`,
+            'User completes the minimum required inputs with clear guidance.',
+            'System confirms the action and shows the next useful step.'
+          ],
+          edgeCases: [
+            `The user arrives with incomplete information for ${context.primaryFeature}.`,
+            'The user returns mid-process and needs to resume safely.'
+          ],
+          failureCases: [
+            'The primary call to action is ambiguous.',
+            'The workflow ends without a clear success confirmation.'
+          ],
+          requiredScreens: ['Entry screen', 'Primary workflow screen', 'Confirmation state'],
+          successCriteria: `A first-time ${context.primaryAudience} user can complete the primary workflow on the first attempt.`,
+          businessRisk: 'If the main flow is confusing, the project fails at the exact moment it is supposed to prove value.'
+        },
+        {
+          name: 'Status, review, or admin follow-through',
+          targetUser: context.primaryAudience,
+          goal: `Review outcomes, exceptions, and next actions after the main ${context.primaryFeature} step.`,
+          startPoint: 'User returns after the first action is submitted.',
+          happyPath: [
+            'User sees the current state clearly.',
+            'User can inspect details without hunting through the interface.',
+            'User knows whether to continue, revise, or wait.'
+          ],
+          edgeCases: ['Important data is missing.', 'A pending review or approval step exists.'],
+          failureCases: ['Status copy is generic.', 'Recovery actions are hidden below the fold.'],
+          requiredScreens: ['Dashboard or status screen', 'Detail or review screen', 'Error or exception state'],
+          successCriteria: 'Users can diagnose the next step from the screen itself.',
+          businessRisk: 'If review state is unclear, teams create manual side workflows and the product stops being trusted.'
+        }
+      ];
+  }
+}
+
+function getUiScreens(input: ProjectInput, context: ProjectContext, workflows: UiWorkflow[]): UiScreen[] {
+  if (!context.uiRelevant) {
+    return [
+      {
+        name: 'No current UI required',
+        purpose: `${input.productName} does not currently require a user-facing interface module beyond this reminder.`,
+        primaryUser: context.primaryAudience,
+        primaryAction: 'Re-open this module if a future phase adds screens, forms, dashboards, or mobile layouts.',
+        secondaryActions: ['Record the future UI trigger in the current phase handoff.'],
+        requiredData: ['Project brief', 'Phase plan', 'New UI requirement once it exists'],
+        emptyState: 'No UI work is planned yet.',
+        loadingState: 'Not applicable until a UI is introduced.',
+        errorState: 'The team starts UI work without reopening this module.',
+        mobileConsiderations: 'Not applicable today. Reassess when a user-facing flow is added.',
+        accessibilityConsiderations: 'Not applicable today. Reassess when real screens exist.',
+        implementationNotes: 'Keep the folder in every package so teams know UI/UX review becomes mandatory once interface work appears.'
+      }
+    ];
+  }
+
+  const baseScreens: UiScreen[] = [
+    {
+      name: `${input.productName} entry screen`,
+      purpose: `Orient ${context.primaryAudience} and make the first step obvious.`,
+      primaryUser: context.primaryAudience,
+      primaryAction: `Start the ${workflows[0]?.name.toLowerCase() || context.primaryFeature} workflow`,
+      secondaryActions: ['Review status summary', 'Open help or onboarding cues'],
+      requiredData: ['Headline that explains value', 'Current state summary', 'Primary call to action'],
+      emptyState: 'Explain what is missing and how to begin.',
+      loadingState: 'Skeleton or progress message that preserves layout.',
+      errorState: 'Clear retry path with plain-language explanation.',
+      mobileConsiderations: 'Primary call to action must stay visible without requiring horizontal scroll.',
+      accessibilityConsiderations: 'Logical heading order, focusable primary action, and descriptive button text.',
+      implementationNotes: 'Do not overload the entry screen with secondary settings or advanced controls.'
+    }
+  ];
+
+  const workflowScreens = Array.from(new Set(workflows.flatMap((workflow) => workflow.requiredScreens))).slice(0, 5);
+  for (const screenName of workflowScreens) {
+    if (baseScreens.some((screen) => screen.name.toLowerCase() === screenName.toLowerCase())) continue;
+    baseScreens.push({
+      name: screenName,
+      purpose: `Support the ${screenName.toLowerCase()} step inside ${input.productName}.`,
+      primaryUser: context.primaryAudience,
+      primaryAction: `Complete the key action for ${screenName.toLowerCase()}.`,
+      secondaryActions: ['Review supporting details', 'Back out safely without losing context'],
+      requiredData: [`Data needed to complete ${screenName.toLowerCase()}`, 'Current status', 'Next-step guidance'],
+      emptyState: `Explain why ${screenName.toLowerCase()} has no data yet and what to do next.`,
+      loadingState: `Show that ${screenName.toLowerCase()} is loading without collapsing the layout.`,
+      errorState: `Tell the user what blocked ${screenName.toLowerCase()} and how to recover.`,
+      mobileConsiderations: 'Stack content vertically, keep labels visible, and avoid side-by-side controls that collapse poorly.',
+      accessibilityConsiderations: 'Use semantic landmarks, explicit labels, and visible focus states for all interactive controls.',
+      implementationNotes: `Keep ${screenName.toLowerCase()} scoped to the workflow. Do not add speculative analytics or advanced settings in v1.`
+    });
+  }
+
+  return baseScreens;
+}
+
+function renderUiWorkflowMarkdown(workflow: UiWorkflow) {
+  return `## ${workflow.name}
+
+- Workflow name: ${workflow.name}
+- Target user: ${workflow.targetUser}
+- User goal: ${workflow.goal}
+- Start point: ${workflow.startPoint}
+- Happy path:
+${workflow.happyPath.map((item) => `  - ${item}`).join('\n')}
+- Edge cases:
+${workflow.edgeCases.map((item) => `  - ${item}`).join('\n')}
+- Failure cases:
+${workflow.failureCases.map((item) => `  - ${item}`).join('\n')}
+- Required screens: ${workflow.requiredScreens.join(', ')}
+- Success criteria: ${workflow.successCriteria}
+- Business risk if the workflow is confusing: ${workflow.businessRisk}
+`;
+}
+
+function renderUiScreenMarkdown(screen: UiScreen) {
+  return `## ${screen.name}
+
+- Screen name: ${screen.name}
+- Purpose: ${screen.purpose}
+- Primary user: ${screen.primaryUser}
+- Primary action: ${screen.primaryAction}
+- Secondary actions: ${screen.secondaryActions.join('; ')}
+- Required data: ${screen.requiredData.join('; ')}
+- Empty state: ${screen.emptyState}
+- Loading state: ${screen.loadingState}
+- Error state: ${screen.errorState}
+- Mobile considerations: ${screen.mobileConsiderations}
+- Accessibility considerations: ${screen.accessibilityConsiderations}
+- Implementation notes: ${screen.implementationNotes}
+`;
+}
+
+function buildUiUxStartHere(input: ProjectInput, context: ProjectContext, workflows: UiWorkflow[]) {
+  if (!context.uiRelevant) {
+    return `# UI_UX_START_HERE
+
+## What this module is
+This is a lightweight Screen and Workflow Review placeholder for ${input.productName}. It is the beginner-friendly name for the UI/UX module. Keep it in the package so future interface work does not start blindly.
+
+## When to use it
+Use the full UI/UX workflow only if a later phase adds a screen, form, dashboard, website, app, portal, admin tool, or other user-facing experience.
+
+## How it fits into the build
+- Current status: optional for now because the project is not clearly UI-driven today.
+- Future rule: if any interface work appears, pause implementation and complete this folder before continuing.
+
+## What order to open files in
+1. UI_UX_START_HERE.md
+2. USER_WORKFLOWS.md
+3. SCREEN_INVENTORY.md
+4. UI_UX_GATE.md
+5. UI_UX_HANDOFF.md
+
+## How to use it with Codex, Claude Code, Kimi, or GLM
+- Give the agent this folder plus PROJECT_BRIEF.md and the current phase packet.
+- Ask the agent to convert the future UI request into workflows, screens, and review criteria before it writes interface code.
+
+## Screenshot collection
+- Not required yet.
+- The moment a real interface exists, capture desktop and mobile screenshots before broader testing.
+
+## When to stop and revise
+- Stop immediately if interface work starts without workflows, screens, empty states, loading states, and error states being documented first.
+`;
+  }
+
+  return `# UI_UX_START_HERE
+
+## What this module is
+This module helps you design and review the ${input.productName} interface before the build drifts into guesswork. The beginner-friendly name for this module is Screen and Workflow Review. It is markdown-first and works with screenshots, plain-language notes, and simple wireframe descriptions instead of requiring Figma.
+
+## When to use it
+Use this folder before UI implementation starts, during UI build work, and again before final testing. Because ${input.productName} has a user-facing workflow for ${context.primaryAudience}, this module is part of the core package, not an optional extra.
+
+## How it fits into the build
+1. Define workflows in USER_WORKFLOWS.md.
+2. Turn those workflows into screens in SCREEN_INVENTORY.md.
+3. Build only the screens needed for the current phase.
+4. Capture screenshots after each meaningful UI change.
+5. Run screenshot critique and complete UI_UX_GATE.md before broader testing.
+
+## What order to open files in
+1. UI_UX_START_HERE.md
+2. USER_WORKFLOWS.md
+3. SCREEN_INVENTORY.md
+4. UX_REVIEW_CHECKLIST.md
+5. UI_IMPLEMENTATION_GUIDE.md
+6. ACCESSIBILITY_CHECKLIST.md
+7. RESPONSIVE_DESIGN_CHECKLIST.md
+8. SCREENSHOT_REVIEW_PROMPT.md
+9. UI_UX_GATE.md
+10. UI_UX_HANDOFF.md
+
+## How to use it with Codex, Claude Code, Kimi, or GLM
+- Give the agent this folder, PROJECT_BRIEF.md, PHASE_PLAN.md, and the current phase packet.
+- Ask the agent to restate the workflow before it writes UI code.
+- Require the agent to name missing states, accessibility risks, and responsive tradeoffs instead of silently guessing.
+
+## How to collect screenshots during the build
+- Capture at least one screenshot for every core screen listed in SCREEN_INVENTORY.md.
+- Capture desktop and mobile versions for the most important workflow screens.
+- Capture empty, loading, and error states for core flows.
+- Name screenshot files clearly so they can be cited during review.
+
+## When to stop and revise the UI before continuing
+- Stop if the primary workflow in ${workflows[0]?.name || context.primaryFeature} cannot be completed cleanly.
+- Stop if screenshots show unclear primary actions, broken mobile layout, or missing error states.
+- Stop if the interface contradicts the business workflow documented elsewhere in the package.
+`;
+}
+
+function buildUxReviewChecklist(context: ProjectContext) {
+  return `# UX_REVIEW_CHECKLIST
+
+## Clarity
+- [ ] Every primary screen explains what the user can do here in one fast scan.
+- [ ] Every primary screen has exactly one obvious primary action above the fold.
+- [ ] The screen title, helper copy, and button labels all describe the same task.
+
+## Workflow completion
+- [ ] The user can complete the main ${context.primaryFeature} workflow without hidden steps or side-channel instructions.
+- [ ] Every workflow has a visible success confirmation and a clear next step.
+- [ ] If the workflow pauses for review, approval, or waiting, the UI explains who acts next and what the user should expect.
+
+## Screen hierarchy
+- [ ] Visual hierarchy makes the primary decision obvious before secondary actions.
+- [ ] Supporting detail does not visually compete with the primary action.
+- [ ] Important warnings or blockers are visible before the user submits.
+
+## Call-to-action clarity
+- [ ] Primary buttons use action language, not vague labels like "Continue" when the outcome is unclear.
+- [ ] Destructive actions are visually distinct from safe actions.
+- [ ] Secondary actions do not outshine the primary path.
+
+## Form usability
+- [ ] Required fields are obvious before submission.
+- [ ] Inputs are grouped in the order users naturally think about the task.
+- [ ] Validation messages explain what to fix, not just that something failed.
+
+## Copy and labels
+- [ ] Labels use business-user language instead of internal implementation jargon.
+- [ ] Empty state copy explains what is missing and how to recover.
+- [ ] Error copy explains cause, impact, and next step in plain language.
+
+## Navigation
+- [ ] Users can tell where they are in the workflow.
+- [ ] Back, cancel, and close actions behave predictably.
+- [ ] Navigation does not hide required work behind ambiguous menu labels.
+
+## Errors and validation
+- [ ] Core flows show inline validation before the user loses work.
+- [ ] Error states preserve enough context for the user to recover.
+- [ ] The same error is not described differently on different screens.
+
+## Empty and loading states
+- [ ] Every core screen has an intentional empty state, loading state, and error state.
+- [ ] Loading placeholders preserve layout and do not make content jump.
+- [ ] Empty states tell the user what to do next instead of dead-ending.
+
+## Trust and safety
+- [ ] Sensitive or high-risk actions are clearly labeled before commitment.
+- [ ] The UI does not imply guarantees the system cannot actually provide.
+- [ ] Risk-heavy workflows surface warnings early enough for users to act on them.
+
+## Mobile layout
+- [ ] Core actions remain visible and tappable on small screens.
+- [ ] Forms, tables, and cards do not require horizontal scrolling for basic use.
+- [ ] Sticky UI elements do not cover primary actions or validation messages.
+
+## Accessibility
+- [ ] Keyboard-only users can reach and operate every core control.
+- [ ] Focus states are always visible.
+- [ ] Screen structure uses semantic headings, labels, and landmarks.
+
+## Business-user readability
+- [ ] A novice business user can explain what each primary screen does after one read.
+- [ ] The UI avoids unnecessary shorthand, acronyms, and engineering-first labels.
+- [ ] Success and failure states are understandable without developer translation.
+
+## Developer implementation readiness
+- [ ] Each screen is specific enough that an agent can build it without inventing missing states.
+- [ ] Reusable components are obvious from the screen definitions.
+- [ ] Any unresolved tradeoff is named explicitly instead of being left implicit.
+`;
+}
+
+function buildUiImplementationGuide(input: ProjectInput, context: ProjectContext, screens: UiScreen[]) {
+  return `# UI_IMPLEMENTATION_GUIDE
+
+## Recommended component structure
+- Start with page shells or route-level screens that match SCREEN_INVENTORY.md.
+- Extract shared components only after two screens clearly need the same pattern.
+- Prefer reusable building blocks such as page header, primary action bar, form section, status card, alert, empty state, loading shell, and error panel.
+
+## Page and screen order
+- Build the entry screen first so navigation and the first decision are clear.
+- Build the main workflow screens next.
+- Build confirmation, empty, loading, and error states before polishing edge UI.
+- Current expected screen sequence: ${screens.map((screen) => screen.name).join(' -> ')}.
+
+## Reusable components
+- Primary action button with disabled, loading, and destructive variants.
+- Form field wrapper with label, helper text, validation message, and accessibility hook-up.
+- Status banner for pass, warning, blocked, and info states.
+- Empty state block with explanation plus next action.
+- Responsive detail container that can collapse from table-like layout to stacked cards.
+
+## Layout guidance
+- Keep one obvious content column for the main decision path.
+- Put secondary metadata in side panels only if it remains readable on mobile.
+- Use spacing and heading levels to separate "do now" actions from background context.
+
+## State handling
+- Explicitly implement empty, loading, success, validation error, and system error states for every core screen.
+- Preserve user input when validation fails unless doing so would be unsafe.
+- If a workflow pauses, explain the current state and next responsible actor on-screen.
+
+## Validation behavior
+- Validate required fields early enough to prevent silent failure.
+- Put the validation message next to the field and summarize at the top when multiple fields fail.
+- Use business-language validation copy, not raw schema or backend jargon.
+
+## Accessibility requirements
+- Use semantic HTML first.
+- Ensure all controls have visible labels and keyboard access.
+- Keep focus order aligned with visual order.
+- Announce important errors and status changes clearly.
+
+## Screenshot expectations
+- Capture screenshots for each core screen plus core empty, loading, and error states.
+- Capture mobile screenshots for the highest-risk workflow screens.
+- Keep screenshot filenames traceable to screen names so reviews can cite evidence.
+
+## What not to build yet
+- Do not add speculative analytics panels, advanced settings, permission matrices, or power-user modes unless a current phase explicitly requires them.
+- Do not build alternate workflows that are not backed by USER_WORKFLOWS.md.
+- Do not over-componentize patterns that appear only once.
+
+## How to avoid overbuilding
+- ${CORE_AGENT_OPERATING_RULES.split('\n').slice(2).join('\n- ')}
+- If a screen detail is unclear, surface the tradeoff instead of inventing more product.
+- Build only the minimum code that proves the current screen and workflow.
+`;
+}
+
+function buildAccessibilityChecklist() {
+  return `# ACCESSIBILITY_CHECKLIST
+
+## Keyboard navigation
+- [ ] Every interactive element can be reached and used with the keyboard alone.
+- [ ] Tab order follows the visual reading order.
+- [ ] No important action is mouse-only.
+
+## Visible focus states
+- [ ] Buttons, links, inputs, tabs, and custom controls all show a clear focus indicator.
+- [ ] Focus is still visible against busy backgrounds or accent colors.
+
+## Contrast
+- [ ] Body text passes readable contrast against its background.
+- [ ] Placeholder text and disabled text are still legible enough for their purpose.
+- [ ] Error and success colors are not the only way meaning is conveyed.
+
+## Labels
+- [ ] Every input has a visible label.
+- [ ] Icon-only controls have accessible names.
+- [ ] Grouped choices have clear fieldset-style context.
+
+## Form errors
+- [ ] Error messages explain what the user must change.
+- [ ] Error messages appear near the field and can also be found quickly at the top if needed.
+- [ ] Submitting with errors moves focus to a useful recovery point.
+
+## Semantic HTML
+- [ ] Pages use meaningful headings in order.
+- [ ] Buttons are buttons and links are links.
+- [ ] Lists, tables, dialogs, and forms use the right semantic structure.
+
+## Screen reader basics
+- [ ] Important page regions are identifiable.
+- [ ] Dynamic status changes are announced when needed.
+- [ ] Decorative images or icons do not create noise.
+
+## Button and link clarity
+- [ ] Action text says what happens next.
+- [ ] Adjacent buttons are easy to distinguish.
+- [ ] Link text makes sense out of context.
+
+## Modal behavior
+- [ ] Focus moves into the modal when it opens.
+- [ ] Focus is trapped inside the modal until it closes.
+- [ ] Focus returns to a sensible place after close.
+
+## Tables
+- [ ] Column headers are clear and associated with data.
+- [ ] Dense tables have a mobile fallback if they become unreadable.
+- [ ] Sort or filter controls remain understandable to screen readers.
+
+## Mobile touch targets
+- [ ] Tap targets are large enough to use without precision clicking.
+- [ ] Inputs and buttons have enough spacing to avoid accidental taps.
+- [ ] Sticky elements do not cover the active field or important errors.
+`;
+}
+
+function buildResponsiveChecklist() {
+  return `# RESPONSIVE_DESIGN_CHECKLIST
+
+## Desktop
+- [ ] Primary workflow reads clearly at common laptop widths.
+- [ ] Important summaries and calls to action appear without awkward empty space.
+
+## Tablet
+- [ ] Layout still preserves workflow order when columns collapse.
+- [ ] Navigation and side panels do not trap key actions below the fold.
+
+## Mobile
+- [ ] Main tasks can be completed with one thumb and vertical scrolling only.
+- [ ] Forms remain readable without pinch zoom.
+
+## Small mobile
+- [ ] Long labels wrap cleanly.
+- [ ] Sticky headers, footers, and banners do not cover buttons or errors.
+
+## Navigation collapse
+- [ ] Collapsed navigation still makes the current location obvious.
+- [ ] Opening navigation does not hide critical workflow controls.
+
+## Form layouts
+- [ ] Two-column forms collapse to one column when width gets tight.
+- [ ] Validation messages remain attached to the right field after collapse.
+
+## Table and card behavior
+- [ ] Wide tables have a deliberate mobile fallback such as stacked cards or priority columns.
+- [ ] Dense information remains scannable after layout collapse.
+
+## Overflow
+- [ ] No core screen requires horizontal scrolling for normal use.
+- [ ] Long text, tags, and buttons do not break containers.
+
+## Touch targets
+- [ ] Interactive controls remain large and well-spaced on touch devices.
+- [ ] Dropdowns, date pickers, and segmented controls remain operable on mobile.
+
+## Sticky headers and footers
+- [ ] Sticky UI helps orientation without blocking content.
+- [ ] Sticky action bars do not hide validation messages or modal controls.
+
+## Modal behavior
+- [ ] Dialogs fit on smaller screens and still allow scrolling to all content.
+- [ ] Close actions remain visible even on short viewports.
+
+## Screenshot evidence
+- [ ] Keep at least one desktop screenshot, one tablet screenshot, and one mobile screenshot for core flows.
+- [ ] Save screenshot evidence before declaring the UI ready for broader testing.
+`;
+}
+
+function buildScreenshotReviewPrompt(input: ProjectInput, context: ProjectContext) {
+  return `# SCREENSHOT_REVIEW_PROMPT
+
+Paste the prompt below into Codex, Claude, Kimi, GLM, or ChatGPT after uploading the latest UI screenshots.
+
+\`\`\`text
+You are reviewing the UI for ${input.productName}.
+
+Required files to compare against:
+- /ui-ux/USER_WORKFLOWS.md
+- /ui-ux/SCREEN_INVENTORY.md
+- /ui-ux/UX_REVIEW_CHECKLIST.md
+- /ui-ux/ACCESSIBILITY_CHECKLIST.md
+- /ui-ux/RESPONSIVE_DESIGN_CHECKLIST.md
+
+Your job:
+1. Inspect every screenshot carefully.
+2. Compare each screenshot against the documented workflows and expected screens.
+3. Identify usability failures with evidence tied to what is visible in the screenshots.
+4. Identify visual hierarchy problems with evidence.
+5. Identify missing empty, loading, or error states for core flows.
+6. Identify accessibility risks with evidence.
+7. Identify confusing copy or labels with evidence.
+8. Score each screen from 0 to 100.
+9. Separate must-fix issues from nice-to-have improvements.
+10. Produce a final UI/UX gate decision: PASS, PASS WITH MINOR ISSUES, REVISE, or BLOCKED.
+
+Rules:
+- Do not give vibe-based feedback.
+- Every finding must cite screenshot evidence and the relevant workflow or screen expectation.
+- If a documented workflow cannot be verified from the screenshots, call that out explicitly.
+- If mobile behavior cannot be verified, say so explicitly.
+- Prefer concrete fixes over abstract design opinions.
+
+Required output format:
+1. Screen-by-screen review with score (0-100) and evidence.
+2. Cross-workflow findings tied to USER_WORKFLOWS.md.
+3. Accessibility risks.
+4. Missing states.
+5. Must-fix issues.
+6. Nice-to-have improvements.
+7. Final gate decision with reasoning.
+\`\`\`
+`;
+}
+
+function buildUiUxGate(context: ProjectContext) {
+  return `# UI_UX_GATE
+
+## Entry criteria
+- The current phase includes real UI work or prepares for it.
+- USER_WORKFLOWS.md and SCREEN_INVENTORY.md reflect the current build.
+- Screenshots exist for the core workflow screens${context.uiRelevant ? ', including mobile views for high-risk screens' : ''}.
+
+## Required evidence
+- Completed workflow review against USER_WORKFLOWS.md
+- Completed screen review against SCREEN_INVENTORY.md
+- Screenshot critique notes with cited evidence
+- Accessibility check notes
+- Responsive check notes
+
+## Required screenshots
+- Primary workflow start screen
+- Primary workflow action screen
+- Primary workflow success or confirmation screen
+- Empty state for a core screen
+- Error or validation state for a core screen
+- Mobile screenshots for the highest-risk workflow screens
+
+## Required workflow demos
+- Demonstrate the primary workflow end to end
+- Demonstrate at least one failure or recovery path
+- Demonstrate the status, confirmation, or follow-through step after the main action
+
+## Required accessibility checks
+- Keyboard navigation
+- Visible focus states
+- Labels and validation clarity
+- Semantic structure for the primary workflow
+
+## Required mobile checks
+- Primary flow works on mobile
+- Layout does not break on small mobile
+- Touch targets remain usable
+
+## Auto-fail conditions
+- Primary workflow cannot be completed
+- No screenshots provided for a UI project
+- Form errors are unclear
+- Mobile layout is broken
+- Primary action is ambiguous
+- UI contradicts the business workflow
+- Empty, error, or loading states are missing for core flows
+
+## Pass conditions
+- Core workflows are complete and understandable
+- Primary actions are obvious on major screens
+- Screenshot evidence covers desktop and mobile where needed
+- Accessibility and responsive checks do not reveal critical blockers
+
+## Revise conditions
+- Workflow is mostly complete but key screens still have clarity, state, or hierarchy issues
+- Accessibility or mobile problems are fixable without changing the product direction
+- Screenshot evidence exists but shows must-fix confusion
+`;
+}
+
+function buildUiUxHandoff() {
+  return `# UI_UX_HANDOFF
+
+## Screens completed
+- pending
+
+## Screens pending
+- pending
+
+## Workflows verified
+- pending
+
+## Screenshots reviewed
+- pending
+
+## Known UX issues
+- pending
+
+## Accessibility issues
+- pending
+
+## Mobile issues
+- pending
+
+## Implementation risks
+- pending
+
+## Final recommendation
+- PASS
+- PASS WITH MINOR ISSUES
+- REVISE
+- BLOCKED
+`;
+}
+
+function buildRecursiveStartHere() {
+  return `# RECURSIVE_TEST_START_HERE
+
+## What recursive testing is
+Recursive testing is a quality-improvement loop, not a one-time test command. The beginner-friendly name for this module is Improve Until Good Enough Loop. The agent reads a test case set, scores the outputs, fixes root causes, reruns tests, and repeats until the required quality threshold is reached or a clear blocker stops progress.
+
+## When to use it
+- After a major build is complete
+- After a large generator or template change
+- After a major phase when normal verification passes but output quality still needs hard scrutiny
+
+## Who should run it
+- Codex, Claude Code, Kimi, or GLM
+- A technical reviewer supervising a quality pass
+
+## What files it needs
+- This folder
+- The generated project artifacts
+- Any attached use-case or swarm test-case file
+- The regression suite and test scripts already generated by Xelera
+
+## Default target score
+- 90/100
+
+## Default max iterations
+- 5 iterations unless the user explicitly changes it
+
+## What to do if it cannot reach the target
+- Stop at the max iteration count
+- Produce a blocker report with root causes, failed use cases, and the highest score reached
+- Do not declare PASS
+
+## How this differs from normal regression testing
+- Normal regression testing checks whether known behaviors still work.
+- Recursive testing scores quality, fixes weaknesses, reruns the system, and repeats until quality is high enough or blocked.
+`;
+}
+
+function buildRecursivePrompt() {
+  return `# RECURSIVE_TEST_PROMPT
+
+\`\`\`text
+You are running Xelera Method recursive testing.
+
+Required behavior:
+1. Inspect the repository.
+2. Read available test cases.
+3. If xelera_kimi_1050_swarm_test_cases.md exists, use it.
+4. If no test case file exists, create a smaller but rigorous test suite from the generated project artifacts.
+5. Test all 10 use cases if available.
+6. Generate outputs for each use case.
+7. Evaluate each output with evidence.
+8. Score each use case from 0 to 100.
+9. Score the overall system from 0 to 100.
+10. Identify root causes, not just symptoms.
+11. Fix the code or templates.
+12. Rerun the relevant tests.
+13. Repeat until overall score >= 90 or max iterations is reached.
+
+Scoring must include:
+- usefulness of generated outputs
+- project-specific quality
+- absence of generic filler
+- correctness of phase plans
+- correctness of gate criteria
+- usefulness of test scripts
+- usefulness of regression suite
+- quality of step-by-step documentation
+- beginner readability
+- agent handoff quality
+- verification evidence quality
+- UI/UX guidance quality, if applicable
+- recursive testing readiness
+
+Rules:
+- Do not give shallow scores.
+- Every score must cite evidence and actual file references.
+- Do not claim a fix worked until you rerun the relevant test or generation path.
+- Fix root causes in templates or generator logic when possible.
+- Keep recursive testing local-first and markdown-first.
+
+Required outputs for every iteration:
+- test cases used
+- commands run
+- files inspected
+- files changed
+- score per use case
+- overall score
+- root causes
+- fixes made
+- remaining blockers
+
+Required final output:
+- final recursive test report
+- iteration log updates
+- score caps applied
+- final recommendation
+\`\`\`
+`;
+}
+
+function buildScoringRubric() {
+  return `# SCORING_RUBRIC
+
+## 100-point rubric
+- 15 points: project-specific generated outputs
+- 10 points: phase and gate quality
+- 10 points: verification and evidence quality
+- 10 points: test script quality
+- 10 points: regression suite quality
+- 10 points: step-by-step documentation quality
+- 10 points: agent handoff quality
+- 10 points: beginner usability
+- 5 points: UI/UX module quality, if applicable
+- 5 points: recursive testing readiness
+- 5 points: code or template maintainability
+
+## Score cap rules
+- If generated artifacts are mostly generic, max score 69.
+- If tests are fake or not runnable, max score 74.
+- If the system says PASS while body says BLOCKED, max score 60.
+- If handoffs are blank templates, max score 70.
+- If phase plans do not match the use case domain, max score 72.
+- If regression suite is missing, max score 78.
+- If step-by-step guide is unusable by a novice, max score 80.
+- If no evidence files are produced, max score 65.
+- If build or typecheck fails, max score 75.
+- If core generated output is missing, max score 59.
+
+## Scoring discipline
+- Apply caps before announcing the final score.
+- Document every cap that was triggered.
+- Do not average away critical failures.
+`;
+}
+
+function buildTestCaseSelectionGuide() {
+  return `# TEST_CASE_SELECTION_GUIDE
+
+- Use all attached test cases when possible.
+- Use representative samples only if the full suite is too large for one pass.
+- Always include 10 diverse use cases when testing generator quality.
+- Include business-heavy, technical-heavy, beginner, intermediate, and advanced scenarios.
+- Include UI and non-UI projects.
+- Include edge cases.
+- Include intentionally vague briefs.
+- Include high-risk domains that need stronger gates.
+- Include projects with integrations.
+- Include projects with multiple user personas.
+`;
+}
+
+function buildIterationLog() {
+  return `# ITERATION_LOG
+
+## Iteration template
+- Iteration number: pending
+- Date and time: pending
+- Test cases used: pending
+- Commands run: pending
+- Files inspected: pending
+- Files changed: pending
+- Score before: pending
+- Score after: pending
+- Issues found: pending
+- Fixes made: pending
+- Remaining blockers: pending
+- Decision: continue | stop passed | stop blocked
+`;
+}
+
+function buildFailureTaxonomy() {
+  const failures = [
+    ['generic artifacts', 'Outputs could fit any project instead of the current domain.', 'A phase brief reads like generic SaaS planning text.', 'High', 'Weak domain grounding in generator templates.', 'Inject project-specific anchors, workflows, and risk terms into templates.'],
+    ['fake evidence', 'Evidence claims review happened but cites no real files or commands.', 'Verification says pass with only “looks good”.', 'Critical', 'Review templates allow vague proof.', 'Tighten evidence requirements and reject generic notes.'],
+    ['shallow test scripts', 'Test scripts exist but do not prove meaningful behavior.', 'A script says “review the app” with no pass criteria.', 'High', 'Template not forcing concrete checks.', 'Add deterministic steps, expected results, and failure conditions.'],
+    ['non-runnable regression suite', 'Regression files exist but cannot actually be used.', 'RUN_REGRESSION.md references missing scripts.', 'Critical', 'Artifact completeness without usability checks.', 'Add missing scripts and smoke assertions for usability.'],
+    ['blank handoffs', 'Handoff files remain template-only.', 'Completion update still says pending update everywhere.', 'High', 'No enforcement on handoff population.', 'Require real completion data before pass decisions.'],
+    ['phase or domain mismatch', 'Phase plan does not fit the use case.', 'A restaurant project gets healthcare-oriented gates.', 'Critical', 'Cross-domain template leakage.', 'Strengthen domain detection and sanitize cross-domain echoes.'],
+    ['contradictory PASS or BLOCKED language', 'Structured result and narrative disagree.', 'Header says pass while final decision says blocked.', 'Critical', 'Weak consistency checks.', 'Add validation and score caps for contradictions.'],
+    ['weak beginner instructions', 'Novice users cannot follow the package.', 'Step guide assumes engineering context without explanation.', 'High', 'Templates optimized only for experts.', 'Add plain-language steps and explicit next actions.'],
+    ['missing UI or UX checks', 'UI projects skip workflow and screenshot review.', 'Screens exist but no UI_UX_GATE evidence exists.', 'High', 'Testing flow ignores interface quality.', 'Wire UI/UX module into build and test flow.'],
+    ['missing accessibility checks', 'UI review never checks keyboard, focus, or labels.', 'A form ships without label review.', 'High', 'Accessibility treated as optional.', 'Add accessibility checklist and gate requirements.'],
+    ['missing recursive testing instructions', 'Quality loop is suggested but not operationalized.', 'A prompt says “improve quality” with no score loop.', 'High', 'Recursive testing left vague.', 'Add scoring rubric, iteration log, caps, and final gate.'],
+    ['overbuilt architecture', 'Artifacts recommend architecture beyond the stated MVP.', 'A local package suddenly assumes hosted backend services.', 'High', 'Speculative implementation drift.', 'Reassert local-first scope and cut speculative work.'],
+    ['missing local-first constraint', 'Generated output starts assuming hosted dependencies.', 'Templates mention accounts or cloud services without need.', 'Critical', 'Constraint not repeated enough in prompts.', 'Add stronger local-first checks to guides and gates.'],
+    ['missing markdown-first constraint', 'Core workflow depends on tools outside markdown artifacts.', 'Critical decisions live only in chat history.', 'Critical', 'Workflow instructions are too loose.', 'Re-center markdown artifacts as the source of truth.'],
+    ['unclear success criteria', 'Outputs do not say what “good” looks like.', 'A gate says “ready” with no measurable condition.', 'High', 'Weak acceptance language.', 'Add observable pass criteria and evidence expectations.'],
+    ['no screenshot evidence for UI project', 'Interface exists but screenshot review never happened.', 'Desktop build is discussed with no screenshots attached.', 'High', 'UI testing path lacks evidence enforcement.', 'Require screenshot evidence before UI pass.'],
+    ['no final gate decision', 'Final report never states a usable recommendation.', 'Report ends with notes but no pass/fail judgment.', 'High', 'Template missing explicit close-out section.', 'Add mandatory final recommendation section.']
+  ];
+
+  return `# FAILURE_TAXONOMY
+
+${failures
+  .map(
+    ([name, definition, example, severity, rootCause, fix]) => `## ${name}
+
+- Definition: ${definition}
+- Example: ${example}
+- Severity: ${severity}
+- Likely root cause: ${rootCause}
+- Recommended fix: ${fix}
+`
+  )
+  .join('\n')}
+`;
+}
+
+function buildRecursiveReport() {
+  return `# RECURSIVE_TEST_REPORT
+
+## Overall score
+- pending
+
+## Per-use-case scores
+- pending
+
+## Scoring methodology
+- pending
+
+## Score caps applied
+- pending
+
+## Iterations completed
+- pending
+
+## Files changed
+- pending
+
+## Commands run
+- pending
+
+## Regression results
+- pending
+
+## Unresolved issues
+- pending
+
+## Final recommendation
+- PASS
+- PASS WITH MINOR ISSUES
+- FAIL UNTIL FIXED
+- BLOCKED
+`;
+}
+
+function buildRecursiveFixGuide() {
+  return `# RECURSIVE_FIX_GUIDE
+
+- Fix root causes, not only generated examples.
+- Update templates if generated artifacts are weak.
+- Update generator logic if outputs are domain-mismatched.
+- Update scoring if bad outputs pass.
+- Update tests if regressions were not caught.
+- Do not overbuild.
+- Do not add unrelated architecture.
+- Touch only files required for the issue.
+- Rerun relevant tests after every fix.
+`;
+}
+
+function buildRegressionRecheckGuide() {
+  return `# REGRESSION_RECHECK_GUIDE
+
+- Identify the minimum regression set by mapping changed files to affected generators, templates, and artifacts.
+- Rerun all 10 use cases when validating broad generator quality changes.
+- Compare old and new scores instead of trusting a single new score in isolation.
+- Prevent false improvement by checking whether weak cases were skipped or scored more loosely.
+- Confirm new fixes do not weaken previously passing behavior, especially gates, evidence rules, and beginner guidance.
+`;
+}
+
+function buildFinalQualityGate() {
+  return `# FINAL_QUALITY_GATE
+
+## Pass requires
+- score >= 90/100
+- no critical blockers
+- all required commands pass
+- regression suite exists and is usable
+- test scripts are meaningful
+- step-by-step documentation is beginner-usable
+- generated outputs are project-specific
+- evidence is real, not fake
+- handoffs are populated
+- UI/UX module passes if the project has UI
+- recursive test report is complete
+
+## Auto-fail conditions
+- score below 90
+- fake evidence
+- generic generated outputs
+- PASS or BLOCKED contradiction
+- missing regression suite
+- missing test scripts
+- missing final report
+- no actual files inspected
+- no actual commands run
+- no iteration log
+- core build or typecheck failure
+`;
+}
+
 function buildRootAgentPrompt(
   agentName: AgentName,
   input: ProjectInput,
@@ -1916,6 +5940,8 @@ Paste this into ${agentName} with the listed files attached or opened.
 - PLAN_CRITIQUE.md
 - PHASE_PLAN.md
 - SCORECARD.md
+- ui-ux/UI_UX_START_HERE.md
+- recursive-test/RECURSIVE_TEST_START_HERE.md
 - phases/${firstPhase.slug}/PHASE_BRIEF.md
 - phases/${firstPhase.slug}/ENTRY_GATE.md
 - phases/${firstPhase.slug}/${buildPromptFile}
@@ -1937,10 +5963,17 @@ Primary feature: ${context.primaryFeature}
 Please:
 1. Restate the project goal and the current phase goal.
 2. Confirm the entry gate and call out any blocker immediately.
-3. Identify the exact implementation repo files you expect to change.
-4. Complete only the current phase.
-5. Run or describe the required tests.
-6. Return a short handoff summary and suggested text for repo/xelera-state.json updates.
+3. ${context.uiRelevant ? 'If the current phase touches interface work, use the UI/UX module before building screens and call out any missing screenshots or states.' : 'If interface work appears later, stop and activate the lightweight UI/UX module before building it.'}
+${firstPhase.phaseType === 'implementation'
+    ? `4. Identify the exact repo files you expect to change. If exact targets are unknown, propose likely areas and label them as assumptions.
+5. Complete only the current phase implementation work.
+6. Run or describe the required tests.
+7. If this is a major build milestone, recommend whether recursive testing should run next.
+8. Return a short handoff summary and suggested text for repo/xelera-state.json updates.`
+    : `4. Produce the planning outputs, decisions, open questions, and evidence notes required for this phase.
+5. Do not invent implementation file changes unless the phase packet names them. If likely repo areas matter, label them as assumptions.
+6. Run or describe the required inspection or review checks.
+7. Return a short handoff summary and suggested text for repo/xelera-state.json updates.`}
 \`\`\`
 `;
 }
@@ -2036,14 +6069,18 @@ Use this file if you want a short workflow for ${agentName}.
 
 ## For each phase
 - Give ${agentName} the current phase folder files only, plus the root context files${agentName === 'OpenCode' ? ', AGENTS.md, and the OpenCode start file' : ''}.
+- If the phase includes UI work, also give ${agentName} the /ui-ux/ files and require screenshot-based critique before final testing.
 - Keep the context packet small.
 - Do not include unrelated earlier phase files unless the current phase explicitly depends on them.
+- Use /recursive-test/ only after a major build milestone. It is a quality-improvement loop, not a substitute for normal verification.
 - After the phase completes, update repo/xelera-state.json and the phase handoff summary.
 `;
 }
 
 function buildAgentsMd() {
   return `# AGENTS
+
+${CORE_AGENT_OPERATING_RULES}
 
 ## Xelera Method agent rules
 - Work one phase at a time.
@@ -2099,6 +6136,1219 @@ function buildXeleraState(bundle: ProjectBundle): XeleraState {
   };
 }
 
+function buildPhaseTestScript(phase: PhasePlan, input: ProjectInput, context: ProjectContext) {
+  const isImplementation = phase.phaseType === 'implementation';
+  const commands = isImplementation
+    ? [
+        { cmd: 'npm run typecheck', expected: 'PASS: no TypeScript errors.', proof: 'TypeScript type safety is intact.' },
+        { cmd: 'npm run build', expected: 'PASS: production build completes.', proof: 'Build does not break.' },
+        { cmd: 'npm run smoke', expected: 'PASS: smoke tests pass.', proof: 'Package generation remains correct.' }
+      ]
+    : [
+        {
+          cmd: `Review phases/${phase.slug}/PHASE_BRIEF.md and compare against the project brief.`,
+          expected: `The phase deliverable names concrete ${context.primaryFeature} decisions and stays inside phase scope.`,
+          proof: 'Planning output is project-specific, not generic filler.'
+        },
+        {
+          cmd: `Inspect phases/${phase.slug}/HANDOFF_SUMMARY.md for real completion updates.`,
+          expected: 'Completion update section shows actual phase outcome, changed files, and exit gate status.',
+          proof: 'Handoff is not a blank template.'
+        },
+        {
+          cmd: `Compare phases/${phase.slug}/EXIT_GATE.md against phases/${phase.slug}/VERIFICATION_REPORT.md.`,
+          expected: 'Every exit criterion is addressed in the verification report.',
+          proof: 'Gates and verification are consistent.'
+        }
+      ];
+
+  const specificChecks = getPhaseTypeSpecificChecks(phase, context, input);
+
+  const manualChecks = specificChecks.map((c) => ({
+    check: c.check,
+    pass: c.pass,
+    fail: c.fail
+  }));
+
+  return `# TEST_SCRIPT for ${phase.name}
+
+## What this file is for
+This file provides the concrete test steps for ${phase.name}. Run or follow these steps before completing VERIFICATION_REPORT.md.
+
+## Phase
+${phase.name}
+
+## Commands or manual procedures
+${commands.map((c, i) => `### Step ${i + 1}
+Command or action: ${c.cmd}
+Expected result: ${c.expected}
+What this proves: ${c.proof}
+Where to record: phases/${phase.slug}/TEST_RESULTS.md
+What to do if this fails: Record the failure in TEST_RESULTS.md and revise the phase before advancing.`).join('\n\n')}
+
+## Manual review checks
+${specificChecks.map((c, i) => `### Manual check ${i + 1}
+Check: ${c.check}
+Pass criteria: ${c.pass}
+Fail criteria: ${c.fail}
+Artifact to inspect: ${c.artifact}
+What good output looks like: ${c.goodLooks}
+What failure looks like: ${c.failureLooks}
+Evidence to capture: ${c.evidence}
+Regression risk if skipped: ${c.regressionRisk}
+Domain-specific reviewer question: ${c.domainScenario}
+Where to record: phases/${phase.slug}/TEST_RESULTS.md`).join('\n\n')}
+
+## Phase-specific exit gate tests
+${phase.exitCriteria.map((c, i) => `### Exit gate check ${i + 1}
+Check: ${c}
+Pass criteria: The criterion is demonstrably met with evidence.
+Fail criteria: The criterion is not met or has no supporting evidence.
+Where to record: phases/${phase.slug}/VERIFICATION_REPORT.md`).join('\n\n')}
+
+## Pass/fail criteria
+- PASS: All commands or manual procedures succeed, all manual checks pass, and exit gate criteria are met with evidence.
+- FAIL: Any command, manual check, or exit gate criterion fails or lacks evidence.
+
+## Failure handling
+- Record the specific failure in TEST_RESULTS.md.
+- Do not advance to the next phase.
+- Revise the phase work and re-run this script.
+- If the failure cannot be resolved, record it as a blocker in HANDOFF_SUMMARY.md and VERIFICATION_REPORT.md.
+
+## Evidence recording
+- Record all results in phases/${phase.slug}/TEST_RESULTS.md.
+- Attach or reference real command output, scenario notes, or changed file paths.
+- Do not fabricate or pre-fill results.
+`;
+}
+
+function buildPhaseTestResults(phase: PhasePlan) {
+  return `# TEST_RESULTS for ${phase.name}
+
+## What this file is for
+Record the test results for this phase here. Do not pre-fill with passing results.
+
+## Date
+pending
+
+## Phase name
+${phase.name}
+
+## Tester/agent
+pending
+
+## Commands run
+-
+
+## Manual checks completed
+-
+
+## Failures found
+-
+
+## Fixes applied
+-
+
+## Evidence files reviewed
+-
+
+## Final result: pending
+Allowed: pending | pass | fail
+
+## Recommendation: pending
+Allowed: pending | proceed | revise | block
+
+## Notes
+-
+`;
+}
+
+function buildTestingStrategy(input: ProjectInput, bundle: ProjectBundle, context: ProjectContext) {
+  const isTechnical = input.track === 'technical';
+  const isBeginner = input.level === 'beginner';
+
+  const domainScenarios = getDomainTestScenarios(context.domainArchetype, context.riskFlags);
+
+  return `# TESTING_STRATEGY for ${input.productName}
+
+## What testing means for this project
+Testing means verifying that every generated artifact is project-specific, every gate is consistent, every evidence file is real, and every handoff preserves context. This is a ${context.profile.label} project for ${context.primaryAudience}.
+
+## Project-specific test scenarios
+${domainScenarios.length ? domainScenarios.map((s) => `- ${s}`).join('\n') : '- No domain-specific scenarios were inferred. Add scenarios based on the must-have features and risk flags.'}
+
+## Types of tests expected
+
+### Smoke tests
+- Confirm BUSINESS_USER_START_HERE.md, CURRENT_STATUS.md, COPY_PASTE_PROMPTS.md, MODULE_MAP.md, WHAT_TO_IGNORE_FOR_NOW.md, and FINAL_CHECKLIST.md exist.
+- Confirm every required root file exists.
+- Confirm every required phase file exists.
+- Confirm AGENTS.md includes the Core Agent Operating Rules.
+- Confirm generated packages can be created, validated, and advanced.
+- Confirm /product-strategy/, /requirements/, /security-risk/, /integrations/, and /architecture/ are generated.
+- Confirm /ui-ux/ and /recursive-test/ are generated.
+
+### Regression tests
+- Confirm artifact completeness after each phase.
+- Confirm gate consistency across phases.
+- Confirm no contradictions between scorecard, lifecycle, gates, and recommendations.
+
+### Gate verification tests
+- Confirm entry gates match phase dependencies.
+- Confirm exit gates include measurable success criteria.
+- Confirm Phase 1 does not require impossible prior-phase evidence.
+- Confirm later phases reference prior handoff and exit evidence.
+
+### UI and screenshot tests
+- ${context.uiRelevant ? 'Confirm /ui-ux/ exists and is used before and during UI implementation.' : 'Confirm the lightweight /ui-ux/ guidance still exists for future interface work.'}
+- Confirm screenshot review guidance exists.
+- Confirm UI_UX_GATE.md includes auto-fail conditions.
+- Confirm accessibility and responsive checks exist for UI projects.
+
+### Recursive quality-loop tests
+- Confirm /recursive-test/ exists.
+- Confirm recursive test prompt includes 0-100 scoring, loop-until-target behavior, default 90/100 target, and max iteration guidance.
+- Confirm recursive testing references test scripts, regression suite, step-by-step documentation, handoff quality, and generated artifact usefulness.
+- Confirm recursive testing is described as a quality-improvement loop, not a replacement for regression testing.
+
+### Artifact quality tests
+- Confirm every phase deliverable references ${context.primaryFeature}.
+- Confirm no phase output is generic boilerplate.
+- Confirm handoff summaries are not blank templates.
+- Confirm Product Goal and Scope includes MVP scope and out-of-scope decisions.
+- Confirm What the App Must Do includes acceptance criteria and open questions.
+- Confirm Private Data and Safety Check includes data classification and secret handling.
+- Confirm External Services and Setup includes environment variables and mocking strategy.
+- Confirm Technical Plan includes a system overview and data model.
+
+### Prompt quality tests
+- Confirm build prompts reference the phase goal and entry gate.
+- Confirm handoff prompts include current phase context.
+
+### Handoff continuity tests
+- Confirm NEXT_PHASE_CONTEXT.md reflects the current phase.
+- Confirm Codex and Claude handoff prompts include relevant phase context.
+- Confirm the next agent can understand what changed, passed, failed, and remains risky.
+
+${isBeginner ? `### Beginner-readability tests
+- Confirm language is plain and jargon is explained.
+- Confirm checklists are concrete and actionable.
+- Confirm step-by-step guidance is present.` : ''}
+
+## What must be tested after every phase
+- Phase deliverables match the phase goal.
+- Entry gate criteria were checked.
+- Exit gate criteria are met.
+- TEST_SCRIPT.md was followed.
+- TEST_RESULTS.md was recorded.
+- VERIFICATION_REPORT.md was completed.
+
+## What must be tested before moving to the next phase
+- All TEST_SCRIPT.md steps pass or failures are explicitly accepted.
+- TEST_RESULTS.md has a final result (pass or fail).
+- VERIFICATION_REPORT.md has a result and recommendation.
+- EVIDENCE_CHECKLIST.md items are checked.
+- No contradictions between test results, verification report, and gate status.
+
+## What must be tested before final package handoff
+- All phase-specific tests pass.
+- The full regression suite from /regression-suite/ passes.
+- ${context.uiRelevant ? 'The UI/UX gate passes with screenshot evidence.' : 'If UI was introduced later, the UI/UX gate was run before final handoff.'}
+- The recursive quality loop has been run after major build completion when quality risk remains high.
+- All TEST_RESULTS.md files are complete.
+- No gates, scorecards, verification reports, or recommendations contradict each other.
+- Handoff files include real project context.
+
+## How to record evidence
+- Use TEST_RESULTS.md in each phase folder.
+- Use /regression-suite/REGRESSION_RESULTS_TEMPLATE.md for regression runs.
+- Use /ui-ux/UI_UX_HANDOFF.md plus screenshot notes for UI evidence.
+- Use /recursive-test/ITERATION_LOG.md and /recursive-test/RECURSIVE_TEST_REPORT.md for recursive quality evidence.
+- Reference real file paths, command output, scenario notes, or decision records.
+
+## What counts as unacceptable evidence
+- Vague claims without file references.
+- Generic phrases like "looks good" or "reviewed".
+- Chat history or informal notes.
+- Placeholder or template text that was not updated.
+- Fabricated command output.
+- TEST_RESULTS.md that defaults to pass.
+
+## How to handle failed tests
+- Record the specific failure in TEST_RESULTS.md.
+- Do not advance to the next phase.
+- Revise the phase work and re-run the test.
+- If the failure cannot be resolved, record it as a blocker.
+- Document the failure in VERIFICATION_REPORT.md and HANDOFF_SUMMARY.md.
+`;
+}
+
+function buildRegressionTestPlan(input: ProjectInput, bundle: ProjectBundle, context: ProjectContext) {
+  const phaseSlugs = bundle.phases.map((p) => p.slug);
+
+  return `# REGRESSION_TEST_PLAN for ${input.productName}
+
+## Project-wide regression checklist
+
+### Artifact completeness
+- [ ] Required root files exist: BUSINESS_USER_START_HERE.md, CURRENT_STATUS.md, COPY_PASTE_PROMPTS.md, MODULE_MAP.md, WHAT_TO_IGNORE_FOR_NOW.md, FINAL_CHECKLIST.md, START_HERE.md, PROJECT_BRIEF.md, PHASE_PLAN.md, SCORECARD.md, TESTING_STRATEGY.md, REGRESSION_TEST_PLAN.md, TEST_SCRIPT_INDEX.md, AGENTS.md
+- [ ] /product-strategy/ exists with all required files.
+- [ ] /requirements/ exists with all required files.
+- [ ] /security-risk/ exists with all required files.
+- [ ] /integrations/ exists with all required files.
+- [ ] /architecture/ exists with all required files.
+- [ ] /ui-ux/ exists with all required files.
+- [ ] /recursive-test/ exists with all required files.
+- [ ] Required phase files exist in every phase folder: PHASE_BRIEF.md, ENTRY_GATE.md, EXIT_GATE.md, TEST_PLAN.md, TEST_SCRIPT.md, TEST_RESULTS.md, VERIFICATION_REPORT.md, EVIDENCE_CHECKLIST.md, HANDOFF_SUMMARY.md, NEXT_PHASE_CONTEXT.md
+- [ ] No phase is missing TEST_PLAN.md, TEST_SCRIPT.md, or TEST_RESULTS.md.
+- [ ] Regression suite exists at /regression-suite/README.md.
+
+### Agent operating rules
+- [ ] Every generated AGENTS.md includes all 4 Core Agent Operating Rules exactly.
+
+### Gate consistency
+- [ ] Entry gates match phase dependencies.
+- [ ] Exit gates include measurable success criteria.
+- [ ] Phase 1 does not require impossible prior-phase evidence.
+- [ ] Later phases correctly reference prior handoff and exit evidence.
+- [ ] Gate status, scorecard, lifecycle status, and recommendation do not contradict each other.
+
+### Evidence quality
+- [ ] Evidence files exist where required.
+- [ ] Evidence is specific to ${context.primaryFeature}, not generic.
+- [ ] No fake command output is accepted.
+- [ ] No report says "pass/proceed" while the body says blocked, failed, pending, or unverified.
+- [ ] TEST_RESULTS.md does not default to pass.
+- [ ] Product strategy, requirements, security, integrations, and architecture files all contain their required sections.
+
+### Testing workflow
+- [ ] Every phase has a test plan (TEST_PLAN.md).
+- [ ] Every phase has a test script or manual test procedure (TEST_SCRIPT.md).
+- [ ] Every phase has a test results template (TEST_RESULTS.md).
+- [ ] The step-by-step guide tells the user to test before verification.
+- [ ] The next-phase flow requires test evidence before proceeding.
+- [ ] START_HERE.md, STEP_BY_STEP_BUILD_GUIDE.md, and README.md all reference the UI/UX and recursive testing modules.
+- [ ] Beginner-facing docs clearly separate business-user files from AI-agent files.
+
+### UI and recursive quality checks
+- [ ] UI files include screenshot review guidance.
+- [ ] UI_UX_GATE.md includes auto-fail conditions.
+- [ ] RECURSIVE_TEST_PROMPT.md includes 0-100 scoring, loop-until-target behavior, and the default 90/100 target.
+- [ ] SCORING_RUBRIC.md includes score caps.
+- [ ] RECURSIVE_TEST_REPORT.md includes per-use-case scores.
+- [ ] Non-UI projects still receive lightweight UI/UX guidance.
+
+### Handoff continuity
+- [ ] NEXT_PHASE_CONTEXT.md reflects the current phase.
+- [ ] Codex and Claude handoff prompts include relevant phase context.
+- [ ] Handoff files are not blank templates.
+- [ ] The next agent can understand what changed, passed, failed, and remains risky.
+
+### Local-first and markdown-first constraints
+- [ ] Generated package does not require hosted services.
+- [ ] Generated package does not require database/auth/SaaS infrastructure unless the project explicitly needs it.
+- [ ] Core workflow remains file-based and local.
+- [ ] Markdown artifacts remain the source of truth.
+- [ ] Architecture does not contradict the MVP scope or the out-of-scope list.
+
+${context.profile.key.endsWith('business') ? `### Business validation
+- [ ] Business acceptance criteria reference ${context.primaryAudience}.
+- [ ] Business value proof is project-specific.
+- [ ] Stakeholder workflows are named explicitly.` : `### Technical validation
+- [ ] Technical acceptance criteria reference ${context.primaryFeature}.
+- [ ] Data boundaries and interfaces are explicit.
+- [ ] Implementation targets are named or labelled as assumptions.`}
+
+${input.level === 'beginner' ? `### Beginner usability
+- [ ] Language is plain and jargon is explained.
+- [ ] Checklists are concrete and actionable.
+- [ ] Step-by-step guidance is present in every phase.` : ''}
+
+## Reusable tests that should be run after every phase
+1. Confirm every phase folder has all required files.
+2. Confirm TEST_RESULTS.md is not pre-filled with pass.
+3. Confirm VERIFICATION_REPORT.md result and recommendation are consistent.
+4. Confirm no phase test result defaults to pass.
+5. Confirm handoff summaries are updated.
+6. Confirm UI/UX or recursive-test references were not removed from root guidance files.
+
+## Tests for generated artifact completeness
+- Confirm all ${phaseSlugs.length} phase folders exist.
+- Confirm each phase folder has at least 10 files.
+- Confirm /ui-ux/ contains the required 10 files.
+- Confirm /recursive-test/ contains the required 10 files.
+
+## Tests for gate consistency
+- Confirm gates/gate-01-entry.md does not mention prior phase handoff.
+- Confirm gates/gate-02-entry.md mentions previous phase handoff.
+
+## Tests for evidence/report consistency
+- Confirm SCORECARD.md does not say pass while VERIFICATION_REPORT.md says blocked.
+- Confirm no report body contradicts its header.
+- Confirm recursive-test/FINAL_QUALITY_GATE.md does not allow PASS below 90/100.
+
+## Tests for no fake or placeholder evidence
+- Confirm no generated file contains fabricated command output.
+- Confirm TEST_RESULTS.md files default to pending.
+
+## Tests for beginner usability where applicable
+${input.level === 'beginner' ? '- Confirm every phase folder includes plain-language step guidance.' : '- Beginner usability checks not applicable for this user level.'}
+
+## Tests for agent handoff quality
+- Confirm CODEX_START_HERE.md, CLAUDE_START_HERE.md, and OPENCODE_START_HERE.md exist.
+- Confirm handoff prompts reference the first phase by name.
+- Confirm agent start files explain when to use UI/UX review and recursive testing.
+
+## Tests for local-only execution
+- Confirm no generated file requires a network connection.
+- Confirm no generated file references hosted services for core workflow.
+`;
+}
+
+function buildTestScriptIndex(bundle: ProjectBundle) {
+  const phaseEntries = bundle.phases.map((phase) => ({
+    slug: phase.slug,
+    name: phase.name,
+    index: phase.index,
+    scriptPath: `phases/${phase.slug}/TEST_SCRIPT.md`,
+    resultsPath: `phases/${phase.slug}/TEST_RESULTS.md`
+  }));
+
+  return `# TEST_SCRIPT_INDEX for ${bundle.phases[0]?.name ? bundle.files[0]?.content.split('\n')[0] : 'project'}
+
+## What this file is for
+This file lists all generated phase test scripts, when to run each, and what each proves.
+
+## Generated phase test scripts
+${phaseEntries.map((entry) => `### Phase ${String(entry.index).padStart(2, '0')}: ${entry.name}
+- Script: ${entry.scriptPath}
+- When to run: After completing phase ${String(entry.index).padStart(2, '0')} implementation and before VERIFICATION_REPORT.md.
+- What it proves: Phase deliverables meet the exit gate criteria with real evidence.
+- Where to paste results: ${entry.resultsPath}
+- Gate supported: Entry gate at gates/gate-${String(entry.index).padStart(2, '0')}-entry.md, exit gate at gates/gate-${String(entry.index).padStart(2, '0')}-exit.md`).join('\n\n')}
+
+## Regression suite
+- Script: /regression-suite/RUN_REGRESSION.md
+- When to run: After every major phase, before next-phase, before final handoff, before committing production code.
+- What it proves: Artifact completeness, gate consistency, evidence quality, handoff continuity, and local-first constraints.
+- Where to paste results: /regression-suite/REGRESSION_RESULTS_TEMPLATE.md
+
+## UI/UX review workflow
+- Script: /ui-ux/SCREENSHOT_REVIEW_PROMPT.md and /ui-ux/UI_UX_GATE.md
+- When to run: Before final testing for any UI work, and after meaningful interface changes.
+- What it proves: Screens, workflows, states, accessibility, and responsive behavior are reviewable with evidence.
+- Where to paste results: /ui-ux/UI_UX_HANDOFF.md
+
+## Recursive quality workflow
+- Script: /recursive-test/RECURSIVE_TEST_PROMPT.md
+- When to run: After a major build milestone or after broad generator changes.
+- What it proves: Quality has been scored, root causes were fixed, regressions were rechecked, and final readiness is evidence-backed.
+- Where to paste results: /recursive-test/ITERATION_LOG.md and /recursive-test/RECURSIVE_TEST_REPORT.md
+
+## When to run the full regression suite
+1. After every major phase.
+2. Before running next-phase.
+3. Before creating a final handoff package.
+4. Before asking another agent to continue the work.
+5. Before committing or pushing production code, if the project includes code.
+6. Whenever a phase fails verification and is revised.
+7. After major build completion, run recursive testing if quality still needs to be pushed higher.
+`;
+}
+
+function buildRegressionSuiteReadme(input: ProjectInput, bundle: ProjectBundle, context: ProjectContext) {
+  return `# Regression Suite for ${input.productName}
+
+## What this suite is for
+This is a reusable regression suite designed to run later in the project, especially before major commits, before handoff, before production deployment, or after future phases.
+
+This suite is a living project asset. It is generated from your project brief, mode, user level, and phase list. It is not generic filler.
+
+## How to use
+1. Read RUN_REGRESSION.md for the full procedure.
+2. Follow each script in /regression-suite/scripts/ in order.
+3. Record results in REGRESSION_RESULTS_TEMPLATE.md.
+4. Do not mark the suite as passing unless every check is verified.
+
+## What this suite covers
+- Artifact completeness
+- Agent operating rules
+- Gate consistency
+- Evidence quality
+- Testing workflow
+- UI/UX module integrity
+- Recursive testing readiness
+- Handoff continuity
+- Local-first and markdown-first constraints
+- Project-specific quality
+
+## Profile
+- Mode: ${context.profile.label}
+- Product: ${input.productName}
+- Audience: ${context.primaryAudience}
+- Phases: ${bundle.phases.length}
+`;
+}
+
+function buildRegressionRun(input: ProjectInput, bundle: ProjectBundle, context: ProjectContext) {
+  return `# RUN_REGRESSION
+
+## What this file is for
+Follow this file to run the full regression suite for ${input.productName}.
+
+## When to run this suite
+1. After every major phase.
+2. Before running next-phase.
+3. Before creating a final handoff package.
+4. Before asking another agent to continue the work.
+5. Before committing or pushing production code, if the project includes code.
+6. Whenever a phase fails verification and is revised.
+
+## Procedure
+1. Open /regression-suite/REGRESSION_CHECKLIST.md and work through every item.
+2. Run the automated regression script: \`npx tsx regression-suite/scripts/run-regression.ts .\`
+3. For each remaining script in /regression-suite/scripts/, follow the procedure and record results.
+4. If the project has UI, review /ui-ux/UI_UX_GATE.md and screenshot evidence before calling testing complete.
+5. Record overall results in /regression-suite/REGRESSION_RESULTS_TEMPLATE.md.
+6. If any check fails, do not proceed. Record the failure and revise.
+
+## Scripts to run in order
+1. /regression-suite/scripts/run-regression.ts (automated)
+2. /regression-suite/scripts/artifact-integrity.md
+3. /regression-suite/scripts/gate-consistency.md
+4. /regression-suite/scripts/evidence-quality.md
+5. /regression-suite/scripts/handoff-continuity.md
+6. /regression-suite/scripts/agent-rules.md
+7. /regression-suite/scripts/local-first.md
+
+## Pass criteria
+- Every script passes without unresolved failures.
+- REGRESSION_RESULTS_TEMPLATE.md records pass for all checks.
+- No contradictions exist between any two result files.
+- Recursive testing is used later for quality improvement, not as a substitute for this suite.
+
+## Failure handling
+- Record the specific failure in REGRESSION_RESULTS_TEMPLATE.md.
+- Do not proceed to next phase or handoff.
+- Revise the relevant artifacts and re-run the suite.
+`;
+}
+
+function buildRegressionChecklist(input: ProjectInput, bundle: ProjectBundle, context: ProjectContext) {
+  const phaseNames = bundle.phases.map((p) => p.name);
+
+  return `# REGRESSION_CHECKLIST for ${input.productName}
+
+## Artifact completeness
+- [ ] Required root files exist (START_HERE.md, PROJECT_BRIEF.md, PHASE_PLAN.md, SCORECARD.md, TESTING_STRATEGY.md, REGRESSION_TEST_PLAN.md, TEST_SCRIPT_INDEX.md, AGENTS.md)
+- [ ] /ui-ux/ exists with all 10 required files.
+- [ ] /recursive-test/ exists with all 10 required files.
+- [ ] Required phase files exist in every phase folder (PHASE_BRIEF.md, ENTRY_GATE.md, EXIT_GATE.md, TEST_PLAN.md, TEST_SCRIPT.md, TEST_RESULTS.md, VERIFICATION_REPORT.md, EVIDENCE_CHECKLIST.md, HANDOFF_SUMMARY.md, NEXT_PHASE_CONTEXT.md)
+- [ ] Every phase has gate, test, verification, evidence, and handoff artifacts.
+- [ ] No phase is missing TEST_PLAN.md, TEST_SCRIPT.md, or TEST_RESULTS.md.
+${phaseNames.map((n) => `- [ ] Phase "${n}" folder has all required files.`).join('\n')}
+
+## Agent operating rules
+- [ ] Every generated AGENTS.md includes these exact rules:
+  1. Don't assume. Don't hide confusion. Surface tradeoffs.
+  2. Minimum code that solves the problem. Nothing speculative.
+  3. Touch only what you must. Clean up only your own mess.
+  4. Define success criteria. Loop until verified.
+- [ ] Codex and Claude entry files do not contradict the operating rules.
+
+## Gate consistency
+- [ ] Entry gates match phase dependencies.
+- [ ] Exit gates include measurable success criteria.
+- [ ] Phase 1 does not require impossible prior-phase evidence.
+- [ ] Later phases correctly reference prior handoff and exit evidence.
+- [ ] Gate status, scorecard, lifecycle status, and recommendation do not contradict each other.
+
+## Evidence quality
+- [ ] Evidence files exist where required.
+- [ ] Evidence is specific, not generic.
+- [ ] No fake command output is accepted.
+- [ ] No report says "pass/proceed" while the body says blocked, failed, pending, or unverified.
+- [ ] TEST_RESULTS.md does not default to pass.
+
+## Testing workflow
+- [ ] Every phase has a test plan.
+- [ ] Every phase has a test script or manual test procedure.
+- [ ] Every phase has a test results template.
+- [ ] The step-by-step guide tells the user to test before verification.
+- [ ] The next-phase flow requires test evidence before proceeding.
+
+## Handoff continuity
+- [ ] NEXT_PHASE_CONTEXT.md reflects the current phase.
+- [ ] Codex and Claude handoff prompts include relevant phase context.
+- [ ] Handoff files are not blank templates.
+- [ ] The next agent can understand what changed, passed, failed, and remains risky.
+
+## Local-first and markdown-first constraints
+- [ ] Generated package does not require hosted services.
+- [ ] Generated package does not require database/auth/SaaS infrastructure unless the project explicitly needs it.
+- [ ] Core workflow remains file-based and local.
+- [ ] Markdown artifacts remain the source of truth.
+
+${context.profile.key.endsWith('business') ? `## Business validation
+- [ ] Business checks reference ${context.primaryAudience}.
+- [ ] Business value proof is project-specific.
+- [ ] Stakeholder workflows are named.` : `## Technical validation
+- [ ] Technical checks reference ${context.primaryFeature}.
+- [ ] Data boundaries and interfaces are explicit.
+- [ ] Implementation targets are named or labelled as assumptions.`}
+
+${input.level === 'beginner' ? `## Beginner usability
+- [ ] Language is plain and jargon is explained.
+- [ ] Checklists are concrete and actionable.
+- [ ] Step-by-step guidance is present.` : ''}
+`;
+}
+
+function buildRegressionResultsTemplate(input: ProjectInput) {
+  return `# REGRESSION_RESULTS for ${input.productName}
+
+## What this file is for
+Record the results of running the regression suite here. Do not pre-fill with passing results.
+
+## Date
+pending
+
+## Runner
+pending
+
+## Suite version
+Generated with project package.
+
+## Scripts run
+- [ ] artifact-integrity
+- [ ] gate-consistency
+- [ ] evidence-quality
+- [ ] handoff-continuity
+- [ ] agent-rules
+- [ ] local-first
+
+## Results
+- artifact-integrity: pending
+- gate-consistency: pending
+- evidence-quality: pending
+- handoff-continuity: pending
+- agent-rules: pending
+- local-first: pending
+
+## Failures found
+-
+
+## Fixes applied
+-
+
+## Evidence files reviewed
+-
+
+## Overall result: pending
+Allowed: pending | pass | fail
+
+## Recommendation: pending
+Allowed: pending | proceed | revise | block
+
+## Notes
+-
+`;
+}
+
+function buildRegressionScriptsReadme() {
+  return `# Regression Scripts
+
+## What this folder is for
+Each file in this folder is a focused regression check. Follow the procedures in order and record results in /regression-suite/REGRESSION_RESULTS_TEMPLATE.md.
+
+## Scripts
+- artifact-integrity.md: Confirm all required files exist in the package.
+- gate-consistency.md: Confirm gates are consistent across phases.
+- evidence-quality.md: Confirm evidence is real and specific.
+- handoff-continuity.md: Confirm handoff files preserve context.
+- agent-rules.md: Confirm AGENTS.md includes the Core Agent Operating Rules.
+- local-first.md: Confirm the package stays local-first and markdown-first.
+`;
+}
+
+function buildArtifactIntegrityScript(input: ProjectInput, bundle: ProjectBundle, context: ProjectContext) {
+  const phaseSlugs = bundle.phases.map((p) => p.slug);
+  const rootFiles = [
+    'BUSINESS_USER_START_HERE.md', 'CURRENT_STATUS.md', 'COPY_PASTE_PROMPTS.md', 'MODULE_MAP.md',
+    'WHAT_TO_IGNORE_FOR_NOW.md', 'FINAL_CHECKLIST.md', 'START_HERE.md', 'PROJECT_BRIEF.md', 'PHASE_PLAN.md', 'SCORECARD.md',
+    'TESTING_STRATEGY.md', 'REGRESSION_TEST_PLAN.md', 'TEST_SCRIPT_INDEX.md',
+    'AGENTS.md', 'QUICKSTART.md', 'TROUBLESHOOTING.md',
+    '00_PROJECT_CONTEXT.md', '01_CONTEXT_RULES.md', '00_APPROVAL_GATE.md',
+    'CODEX_START_HERE.md', 'CLAUDE_START_HERE.md', 'OPENCODE_START_HERE.md',
+    'CODEX_HANDOFF_PROMPT.md', 'CLAUDE_HANDOFF_PROMPT.md', 'OPENCODE_HANDOFF_PROMPT.md',
+    'HANDOFF.md', 'STEP_BY_STEP_BUILD_GUIDE.md', 'QUESTIONNAIRE.md', 'PLAN_CRITIQUE.md'
+  ];
+  const phaseFiles = [
+    'PHASE_BRIEF.md', 'ENTRY_GATE.md', 'EXIT_GATE.md', 'TEST_PLAN.md',
+    'TEST_SCRIPT.md', 'TEST_RESULTS.md', 'VERIFICATION_REPORT.md',
+    'EVIDENCE_CHECKLIST.md', 'HANDOFF_SUMMARY.md', 'NEXT_PHASE_CONTEXT.md',
+    'CODEX_BUILD_PROMPT.md', 'CLAUDE_BUILD_PROMPT.md', 'OPENCODE_BUILD_PROMPT.md',
+    'VERIFY_PROMPT.md', 'README.md'
+  ];
+
+  return `# artifact-integrity
+
+## Purpose
+Confirm that every required root file, phase file, and regression suite file exists on disk for ${input.productName}. Missing files break the package contract and make handoff impossible.
+
+## When to run
+- After generating the package.
+- After any phase that creates or deletes files.
+- Before handoff to another agent.
+- Before committing the package to version control.
+
+## Inputs
+- Package root folder containing the generated workspace.
+- This script as the checklist.
+
+## Step-by-step checks
+
+### Step 1: Check root files
+Confirm these root files exist:
+${rootFiles.map((f) => `- [ ] ${f}`).join('\n')}
+
+### Step 2: Check phase folders
+Confirm all ${phaseSlugs.length} phase folders exist:
+${phaseSlugs.map((s) => `- [ ] ${s}/`).join('\n')}
+
+### Step 3: Check phase files
+Confirm every phase folder contains these files:
+${phaseFiles.map((f) => `- [ ] ${f}`).join('\n')}
+
+### Step 4: Check regression suite
+- [ ] /regression-suite/README.md exists.
+- [ ] /regression-suite/RUN_REGRESSION.md exists.
+- [ ] /regression-suite/REGRESSION_CHECKLIST.md exists.
+- [ ] /regression-suite/REGRESSION_RESULTS_TEMPLATE.md exists.
+- [ ] /regression-suite/scripts/ exists.
+
+### Step 5: Check repo files
+- [ ] repo/manifest.json exists.
+- [ ] repo/xelera-state.json exists.
+- [ ] repo/input.json exists.
+
+## Pass criteria
+Every checkbox above is checked and every file is non-empty.
+
+## Fail criteria
+Any required file or folder is missing, or any required file is empty.
+
+## Evidence to capture
+- List of missing files, if any.
+- Screenshot or file listing showing the package root and phases/ folder contents.
+
+## Output location
+Record results in /regression-suite/REGRESSION_RESULTS_TEMPLATE.md under the artifact-integrity section.
+
+## Stop conditions
+Stop immediately if any required file is missing. Do not proceed to other regression scripts until the package is regenerated or the missing files are restored.
+`;
+}
+
+function buildGateConsistencyScript(input: ProjectInput, bundle: ProjectBundle, context: ProjectContext) {
+  return `# gate-consistency
+
+## Purpose
+Confirm that entry gates, exit gates, scorecard, verification reports, and test results do not contradict each other for ${input.productName}. Contradictions mean a phase could advance on false pretenses.
+
+## When to run
+- After filling out any VERIFICATION_REPORT.md.
+- After updating TEST_RESULTS.md.
+- Before running next-phase.
+- After changing lifecycle status or scorecard.
+
+## Inputs
+- All gate files in gates/.
+- All phase VERIFICATION_REPORT.md files.
+- All phase TEST_RESULTS.md files.
+- SCORECARD.md.
+- repo/manifest.json and repo/xelera-state.json.
+
+## Step-by-step checks
+
+### Step 1: Phase 1 entry gate sanity
+- [ ] gates/gate-01-entry.md does not mention prior phase handoff.
+- [ ] gates/gate-01-entry.md checks that the project brief exists.
+
+### Step 2: Later phase entry gates
+${bundle.phases.slice(1).map((p) => `- [ ] gates/gate-${String(p.index).padStart(2, '0')}-entry.md mentions previous phase handoff.`).join('\n')}
+
+### Step 3: Exit gates have measurable criteria
+${bundle.phases.map((p) => `- [ ] gates/gate-${String(p.index).padStart(2, '0')}-exit.md has concrete expected outputs for ${p.name}.`).join('\n')}
+
+### Step 4: No gate/status contradictions
+- [ ] SCORECARD.md does not claim Build ready while the package is Blocked.
+- [ ] No VERIFICATION_REPORT.md says pass while the body mentions blocked, failed, or pending.
+- [ ] No VERIFICATION_REPORT.md says proceed while the final decision says not ready.
+- [ ] No VERIFICATION_REPORT.md says pass while TEST_RESULTS.md is still pending.
+- [ ] No VERIFICATION_REPORT.md says pass while TEST_RESULTS.md says fail.
+- [ ] TEST_RESULTS.md does not default to pass.
+
+### Step 5: Later phases reference prior evidence
+${bundle.phases.slice(1).map((p) => `- [ ] phases/${p.slug}/ENTRY_GATE.md references previous phase completion.`).join('\n')}
+
+## Pass criteria
+Every check above passes and no contradictions exist between any two files.
+
+## Fail criteria
+Any gate contradicts another gate, the scorecard, a verification report, or a test result.
+
+## Evidence to capture
+- File paths of any contradicting pair.
+- The exact contradictory sentences copied from each file.
+- Which file should be treated as the source of truth.
+
+## Output location
+Record results in /regression-suite/REGRESSION_RESULTS_TEMPLATE.md under the gate-consistency section.
+
+## Stop conditions
+Stop immediately if any contradiction is found. Do not run next-phase until the contradiction is resolved and the conflicting files are updated.
+`;
+}
+
+function buildEvidenceQualityScript(input: ProjectInput, bundle: ProjectBundle, context: ProjectContext) {
+  return `# evidence-quality
+
+## Purpose
+Confirm that every piece of evidence is real, specific to ${input.productName}, and not fabricated. Fake or generic evidence breaks trust in the entire package.
+
+## When to run
+- After filling out any VERIFICATION_REPORT.md or TEST_RESULTS.md.
+- Before running next-phase.
+- Before handoff to another agent.
+- Whenever a verification report claims pass + proceed.
+
+## Inputs
+- All phase EVIDENCE_CHECKLIST.md files.
+- All phase TEST_RESULTS.md files.
+- All phase VERIFICATION_REPORT.md files.
+- Any external notes or command-output files referenced as evidence.
+
+## Step-by-step checks
+
+### Step 1: Evidence files exist where required
+${bundle.phases.map((p) => `- [ ] phases/${p.slug}/EVIDENCE_CHECKLIST.md exists and has a Required evidence section.`).join('\n')}
+
+### Step 2: Evidence is specific
+${bundle.phases.slice(0, 5).map((p) => `- [ ] phases/${p.slug}/EVIDENCE_CHECKLIST.md references ${context.primaryFeature} or ${p.name}, not just generic text.`).join('\n')}
+
+### Step 3: No fake command output
+- [ ] No TEST_RESULTS.md contains fabricated command output.
+- [ ] No VERIFICATION_REPORT.md contains fabricated command output.
+
+### Step 4: No report contradictions
+- [ ] No VERIFICATION_REPORT.md says pass + proceed while evidence files section says pending.
+- [ ] No TEST_RESULTS.md defaults to pass.
+- [ ] No TEST_RESULTS.md contains generic phrases like "looks good" or "no issues found".
+
+### Step 5: TEST_RESULTS.md defaults to pending
+${bundle.phases.map((p) => `- [ ] phases/${p.slug}/TEST_RESULTS.md has "Final result: pending" and "Recommendation: pending".`).join('\n')}
+
+### Step 6: Regression results are not pre-filled
+- [ ] REGRESSION_RESULTS_TEMPLATE.md does not default to pass.
+
+## Pass criteria
+Every check above passes and every evidence file contains concrete, project-specific content.
+
+## Fail criteria
+Any evidence is missing, generic, fabricated, contradictory, or defaults to pass without real execution.
+
+## Evidence to capture
+- Copy of the generic or fake sentence found.
+- File path where it was found.
+- What concrete replacement should say.
+
+## Output location
+Record results in /regression-suite/REGRESSION_RESULTS_TEMPLATE.md under the evidence-quality section.
+
+## Stop conditions
+Stop immediately if any evidence is found to be generic or fabricated. Do not proceed until the evidence is replaced with concrete, recorded results.
+`;
+}
+
+function buildHandoffContinuityScript(input: ProjectInput, bundle: ProjectBundle, context: ProjectContext) {
+  return `# handoff-continuity
+
+## Purpose
+Confirm that handoff files preserve enough real context for the next agent to continue ${input.productName} without guessing what happened in earlier phases.
+
+## When to run
+- After completing any phase.
+- Before handing off to a different agent.
+- Before asking another human or AI to resume work.
+- Before creating a final export package.
+
+## Inputs
+- All phase NEXT_PHASE_CONTEXT.md files.
+- All phase HANDOFF_SUMMARY.md files.
+- Root agent start files (CODEX_START_HERE.md, CLAUDE_START_HERE.md, OPENCODE_START_HERE.md).
+- Root handoff prompts (CODEX_HANDOFF_PROMPT.md, CLAUDE_HANDOFF_PROMPT.md, OPENCODE_HANDOFF_PROMPT.md).
+
+## Step-by-step checks
+
+### Step 1: NEXT_PHASE_CONTEXT reflects current phase
+${bundle.phases.map((p) => `- [ ] phases/${p.slug}/NEXT_PHASE_CONTEXT.md names ${p.name} as the current phase.`).join('\n')}
+
+### Step 2: Handoff prompts include phase context
+- [ ] CODEX_HANDOFF_PROMPT.md references the first phase by name.
+- [ ] CLAUDE_HANDOFF_PROMPT.md references the first phase by name.
+- [ ] OPENCODE_HANDOFF_PROMPT.md references the first phase by name.
+
+### Step 3: Handoff summaries are not blank
+${bundle.phases.map((p) => `- [ ] phases/${p.slug}/HANDOFF_SUMMARY.md has expected outputs and a completion update section.`).join('\n')}
+
+### Step 4: Context survives agent switch
+- [ ] A new agent reading CODEX_START_HERE.md could identify the current phase.
+- [ ] A new agent reading CLAUDE_START_HERE.md could identify the current phase.
+- [ ] A new agent reading OPENCODE_START_HERE.md could identify the current phase.
+
+### Step 5: Test results are carried forward
+- [ ] Every completed phase has TEST_RESULTS.md filled with actual results, not left as pending.
+- [ ] Every completed phase has VERIFICATION_REPORT.md completed before NEXT_PHASE_CONTEXT.md was written.
+
+## Pass criteria
+Every check above passes and a new reader can reconstruct the project state without chat history.
+
+## Fail criteria
+Any handoff file is blank, generic, missing phase context, or left as a template with no real updates.
+
+## Evidence to capture
+- File path of the incomplete handoff file.
+- What specific context is missing (phase name, decisions, test results, blockers).
+- The sentence or section that should have been updated.
+
+## Output location
+Record results in /regression-suite/REGRESSION_RESULTS_TEMPLATE.md under the handoff-continuity section.
+
+## Stop conditions
+Stop immediately if any handoff file is still a blank template. Do not hand off until the missing context is written.
+`;
+}
+
+function buildAgentRulesScript(input: ProjectInput) {
+  return `# agent-rules
+
+## Purpose
+Confirm that AGENTS.md includes the 4 Core Agent Operating Rules exactly and that no agent file contradicts them. The rules exist to prevent silent scope creep and unchecked assumptions.
+
+## When to run
+- After generating the package.
+- After editing AGENTS.md or any agent start file.
+- Before handoff to a new agent.
+- After any phase where an agent might have modified agent-facing files.
+
+## Inputs
+- AGENTS.md in the package root.
+- CODEX_START_HERE.md, CLAUDE_START_HERE.md, OPENCODE_START_HERE.md.
+- CODEX_HANDOFF_PROMPT.md, CLAUDE_HANDOFF_PROMPT.md, OPENCODE_HANDOFF_PROMPT.md.
+- At least one phase CODEX_BUILD_PROMPT.md and CLAUDE_BUILD_PROMPT.md.
+
+## Step-by-step checks
+
+### Step 1: AGENTS.md exists
+- [ ] AGENTS.md exists in the package root.
+
+### Step 2: Core Agent Operating Rules are present exactly
+- [ ] AGENTS.md contains "## Core Agent Operating Rules"
+- [ ] AGENTS.md contains "1. Don't assume. Don't hide confusion. Surface tradeoffs."
+- [ ] AGENTS.md contains "2. Minimum code that solves the problem. Nothing speculative."
+- [ ] AGENTS.md contains "3. Touch only what you must. Clean up only your own mess."
+- [ ] AGENTS.md contains "4. Define success criteria. Loop until verified."
+
+### Step 3: Agent entry files do not contradict rules
+- [ ] CODEX_START_HERE.md does not contradict the operating rules.
+- [ ] CLAUDE_START_HERE.md does not contradict the operating rules.
+- [ ] OPENCODE_START_HERE.md does not contradict the operating rules.
+- [ ] CODEX_HANDOFF_PROMPT.md does not contradict the operating rules.
+- [ ] CLAUDE_HANDOFF_PROMPT.md does not contradict the operating rules.
+- [ ] OPENCODE_HANDOFF_PROMPT.md does not contradict the operating rules.
+
+### Step 4: Phase build prompts reinforce rules when appropriate
+- [ ] At least one phase CODEX_BUILD_PROMPT.md mentions testing or verification.
+- [ ] At least one phase CLAUDE_BUILD_PROMPT.md mentions testing or verification.
+- [ ] At least one phase OPENCODE_BUILD_PROMPT.md mentions testing or verification.
+
+## Pass criteria
+All 4 operating rules are present exactly in AGENTS.md and no agent file contradicts them.
+
+## Fail criteria
+Any rule is missing, paraphrased, or contradicted by an agent-facing file.
+
+## Evidence to capture
+- Exact text of any missing or paraphrased rule.
+- File path and sentence that contradicts a rule.
+- Whether the contradiction is explicit instruction or implicit assumption.
+
+## Output location
+Record results in /regression-suite/REGRESSION_RESULTS_TEMPLATE.md under the agent-rules section.
+
+## Stop conditions
+Stop immediately if any Core Agent Operating Rule is missing or contradicted. Do not proceed with agent handoff until AGENTS.md is corrected.
+`;
+}
+
+function buildRunnableRegressionScript() {
+  return `#!/usr/bin/env tsx
+import fs from 'node:fs';
+import path from 'node:path';
+
+const CHECKS = {
+  pass: 0,
+  fail: 0,
+  issues: [] as string[]
+};
+
+function check(name: string, condition: boolean, message: string) {
+  if (condition) {
+    CHECKS.pass++;
+  } else {
+    CHECKS.fail++;
+    CHECKS.issues.push(\`FAIL: \${name}: \${message}\`);
+  }
+}
+
+function fileExists(packageRoot: string, filePath: string) {
+  return fs.existsSync(path.join(packageRoot, filePath));
+}
+
+function readFile(packageRoot: string, filePath: string) {
+  const fullPath = path.join(packageRoot, filePath);
+  if (!fs.existsSync(fullPath)) return '';
+  return fs.readFileSync(fullPath, 'utf8');
+}
+
+function runRegression(packageRoot: string) {
+  console.log(\`Running regression suite on \${packageRoot}...\\n\`);
+
+  check(
+    'Root files exist',
+    fileExists(packageRoot, 'BUSINESS_USER_START_HERE.md') &&
+      fileExists(packageRoot, 'CURRENT_STATUS.md') &&
+      fileExists(packageRoot, 'COPY_PASTE_PROMPTS.md') &&
+      fileExists(packageRoot, 'MODULE_MAP.md') &&
+      fileExists(packageRoot, 'WHAT_TO_IGNORE_FOR_NOW.md') &&
+      fileExists(packageRoot, 'FINAL_CHECKLIST.md') &&
+      fileExists(packageRoot, 'START_HERE.md') &&
+      fileExists(packageRoot, 'PROJECT_BRIEF.md') &&
+      fileExists(packageRoot, 'PHASE_PLAN.md') &&
+      fileExists(packageRoot, 'SCORECARD.md') &&
+      fileExists(packageRoot, 'TESTING_STRATEGY.md') &&
+      fileExists(packageRoot, 'REGRESSION_TEST_PLAN.md') &&
+      fileExists(packageRoot, 'TEST_SCRIPT_INDEX.md') &&
+      fileExists(packageRoot, 'AGENTS.md') &&
+      fileExists(packageRoot, 'ui-ux/UI_UX_START_HERE.md') &&
+      fileExists(packageRoot, 'recursive-test/RECURSIVE_TEST_START_HERE.md'),
+    'Missing required root files'
+  );
+
+  check('UI/UX module files exist', fileExists(packageRoot, 'ui-ux/UI_UX_GATE.md') && fileExists(packageRoot, 'ui-ux/SCREENSHOT_REVIEW_PROMPT.md'), 'Missing required UI/UX files');
+  check('Recursive test module files exist', fileExists(packageRoot, 'recursive-test/RECURSIVE_TEST_PROMPT.md') && fileExists(packageRoot, 'recursive-test/FINAL_QUALITY_GATE.md'), 'Missing required recursive test files');
+
+  const agentsMd = readFile(packageRoot, 'AGENTS.md');
+  check(
+    'AGENTS.md includes Core Agent Operating Rules',
+    /## Core Agent Operating Rules/.test(agentsMd) &&
+      /Don't assume/.test(agentsMd) &&
+      /Minimum code/.test(agentsMd) &&
+      /Touch only what you must/.test(agentsMd) &&
+      /Define success criteria/.test(agentsMd),
+    'AGENTS.md missing Core Agent Operating Rules'
+  );
+
+  const manifest = JSON.parse(readFile(packageRoot, 'repo/manifest.json') || '{}');
+  const phaseCount = manifest.phaseCount || 0;
+  check(
+    'Manifest has phase count',
+    phaseCount >= 10,
+    \`Phase count \${phaseCount} is below minimum of 10\`
+  );
+
+  for (let i = 1; i <= phaseCount; i++) {
+    const slug = \`phase-\${String(i).padStart(2, '0')}\`;
+    const phaseFolder = \`phases/\${slug}\`;
+
+    check(\`Phase \${slug} has PHASE_BRIEF.md\`, fileExists(packageRoot, \`\${phaseFolder}/PHASE_BRIEF.md\`), \`Missing \${phaseFolder}/PHASE_BRIEF.md\`);
+    check(\`Phase \${slug} has ENTRY_GATE.md\`, fileExists(packageRoot, \`\${phaseFolder}/ENTRY_GATE.md\`), \`Missing \${phaseFolder}/ENTRY_GATE.md\`);
+    check(\`Phase \${slug} has EXIT_GATE.md\`, fileExists(packageRoot, \`\${phaseFolder}/EXIT_GATE.md\`), \`Missing \${phaseFolder}/EXIT_GATE.md\`);
+    check(\`Phase \${slug} has TEST_PLAN.md\`, fileExists(packageRoot, \`\${phaseFolder}/TEST_PLAN.md\`), \`Missing \${phaseFolder}/TEST_PLAN.md\`);
+    check(\`Phase \${slug} has TEST_SCRIPT.md\`, fileExists(packageRoot, \`\${phaseFolder}/TEST_SCRIPT.md\`), \`Missing \${phaseFolder}/TEST_SCRIPT.md\`);
+    check(\`Phase \${slug} has TEST_RESULTS.md\`, fileExists(packageRoot, \`\${phaseFolder}/TEST_RESULTS.md\`), \`Missing \${phaseFolder}/TEST_RESULTS.md\`);
+    check(\`Phase \${slug} has VERIFICATION_REPORT.md\`, fileExists(packageRoot, \`\${phaseFolder}/VERIFICATION_REPORT.md\`), \`Missing \${phaseFolder}/VERIFICATION_REPORT.md\`);
+    check(\`Phase \${slug} has EVIDENCE_CHECKLIST.md\`, fileExists(packageRoot, \`\${phaseFolder}/EVIDENCE_CHECKLIST.md\`), \`Missing \${phaseFolder}/EVIDENCE_CHECKLIST.md\`);
+    check(\`Phase \${slug} has HANDOFF_SUMMARY.md\`, fileExists(packageRoot, \`\${phaseFolder}/HANDOFF_SUMMARY.md\`), \`Missing \${phaseFolder}/HANDOFF_SUMMARY.md\`);
+    check(\`Phase \${slug} has NEXT_PHASE_CONTEXT.md\`, fileExists(packageRoot, \`\${phaseFolder}/NEXT_PHASE_CONTEXT.md\`), \`Missing \${phaseFolder}/NEXT_PHASE_CONTEXT.md\`);
+
+    const testResults = readFile(packageRoot, \`\${phaseFolder}/TEST_RESULTS.md\`);
+    check(\`Phase \${slug} TEST_RESULTS.md defaults to pending\`, /## Final result: pending/.test(testResults), 'TEST_RESULTS.md does not default to pending');
+
+    const verificationReport = readFile(packageRoot, \`\${phaseFolder}/VERIFICATION_REPORT.md\`);
+    check(\`Phase \${slug} VERIFICATION_REPORT.md has result field\`, /## result: pending/.test(verificationReport), 'VERIFICATION_REPORT.md missing result field');
+    check(\`Phase \${slug} VERIFICATION_REPORT.md has recommendation field\`, /## recommendation: pending/.test(verificationReport), 'VERIFICATION_REPORT.md missing recommendation field');
+  }
+
+  const gate01Entry = readFile(packageRoot, 'gates/gate-01-entry.md');
+  check('Phase 1 entry gate does not require prior handoff', !/prior phase handoff/i.test(gate01Entry), 'Phase 1 entry gate incorrectly mentions prior phase handoff');
+
+  if (phaseCount >= 2) {
+    const gate02Entry = readFile(packageRoot, 'gates/gate-02-entry.md');
+    check('Phase 2 entry gate requires prior handoff', /Previous phase handoff complete/.test(gate02Entry), 'Phase 2 entry gate missing prior handoff requirement');
+  }
+
+  check('Regression suite README exists', fileExists(packageRoot, 'regression-suite/README.md'), 'Missing regression-suite/README.md');
+  check('Regression suite RUN_REGRESSION.md exists', fileExists(packageRoot, 'regression-suite/RUN_REGRESSION.md'), 'Missing regression-suite/RUN_REGRESSION.md');
+
+  const startHere = readFile(packageRoot, 'START_HERE.md');
+  const businessStart = readFile(packageRoot, 'BUSINESS_USER_START_HERE.md');
+  const stepGuide = readFile(packageRoot, 'STEP_BY_STEP_BUILD_GUIDE.md');
+  const readme = readFile(packageRoot, 'README.md');
+  const promptGuide = readFile(packageRoot, 'COPY_PASTE_PROMPTS.md');
+  const moduleMap = readFile(packageRoot, 'MODULE_MAP.md');
+  const uiGate = readFile(packageRoot, 'ui-ux/UI_UX_GATE.md');
+  const recursivePrompt = readFile(packageRoot, 'recursive-test/RECURSIVE_TEST_PROMPT.md');
+  const scoringRubric = readFile(packageRoot, 'recursive-test/SCORING_RUBRIC.md');
+  check('Root docs reference UI/UX module', /ui-ux\/UI_UX_START_HERE\.md/i.test(startHere) && /ui-ux\/UI_UX_START_HERE\.md/i.test(readme) && /UI\/UX/i.test(stepGuide), 'Root docs do not consistently reference UI/UX module');
+  check('Root docs reference recursive test module', /recursive-test\/RECURSIVE_TEST_START_HERE\.md/i.test(startHere) && /recursive-test\/RECURSIVE_TEST_START_HERE\.md/i.test(readme) && /recursive testing/i.test(stepGuide), 'Root docs do not consistently reference recursive test module');
+  check('START_HERE tells users not to open every folder', /do not need to open every folder/i.test(startHere), 'START_HERE.md should tell the user not to open every folder');
+  check('Business-user docs use beginner-friendly module names', /Screen and Workflow Review/i.test(businessStart) && /Improve Until Good Enough Loop/i.test(businessStart), 'Beginner-facing docs are missing friendly module names');
+  check('Step guide includes Decide Plan Design Build Test Handoff', /## 1\. Decide/i.test(stepGuide) && /## 2\. Plan/i.test(stepGuide) && /## 3\. Design/i.test(stepGuide) && /## 4\. Build/i.test(stepGuide) && /## 5\. Test/i.test(stepGuide) && /## 6\. Handoff/i.test(stepGuide), 'Step guide is missing the required stage order');
+  check('Module map includes required classifications', /## Required/i.test(moduleMap) && /## Recommended/i.test(moduleMap) && /## Optional/i.test(moduleMap) && /## Not needed now/i.test(moduleMap), 'MODULE_MAP.md is missing the required classifications');
+  check('Copy and paste prompts are in order', /## 1\. Decide/i.test(promptGuide) && /## 2\. Plan/i.test(promptGuide) && /## 3\. Design/i.test(promptGuide) && /## 4\. Build/i.test(promptGuide) && /## 5\. Test/i.test(promptGuide) && /## 6\. Handoff/i.test(promptGuide), 'COPY_PASTE_PROMPTS.md is missing ordered prompts');
+  check('UI gate includes auto-fail conditions', /## Auto-fail conditions/i.test(uiGate) && /no screenshots provided for a ui project/i.test(uiGate), 'UI gate is missing required auto-fail conditions');
+  check('Recursive prompt includes scoring loop', /score each use case from 0 to 100/i.test(recursivePrompt) && /overall score >= 90/i.test(recursivePrompt), 'Recursive prompt is missing the scoring loop requirements');
+  check('Scoring rubric includes score caps', /## Score cap rules/i.test(scoringRubric) && /max score 69/i.test(scoringRubric), 'Scoring rubric is missing score caps');
+
+  const scorecard = readFile(packageRoot, 'SCORECARD.md');
+  const lifecycle = manifest.lifecycleStatus;
+  if (lifecycle === 'Blocked') {
+    check('Blocked package scorecard does not claim Build ready', !/## Rating\s+Build ready/i.test(scorecard), 'Blocked package SCORECARD says Build ready');
+  }
+
+  console.log(\`\\n========================================\`);
+  console.log(\`  Regression Suite Results\`);
+  console.log(\`========================================\`);
+  console.log(\`Passed: \${CHECKS.pass}\`);
+  console.log(\`Failed: \${CHECKS.fail}\`);
+  console.log(\`Total:  \${CHECKS.pass + CHECKS.fail}\`);
+  console.log(\`========================================\`);
+
+  if (CHECKS.issues.length > 0) {
+    console.log('\\nIssues:');
+    for (const issue of CHECKS.issues) {
+      console.log(\`  \${issue}\`);
+    }
+    process.exit(1);
+  } else {
+    console.log('\\nAll regression checks passed.');
+  }
+}
+
+const packageRoot = process.argv[2];
+if (!packageRoot) {
+  console.error('Usage: tsx run-regression.ts <package-root>');
+  process.exit(1);
+}
+
+runRegression(path.resolve(packageRoot));
+`;
+}
+
+function buildLocalFirstScript(input: ProjectInput, context: ProjectContext) {
+  return `# local-first
+
+## Purpose
+Confirm the generated package for ${input.productName} stays local-first and markdown-first. Hosted dependencies, database requirements, or SaaS workflows in the planning layer break the core design contract.
+
+## When to run
+- After generating the package.
+- After any phase that adds new files or references external services.
+- Before committing the package.
+- Before final handoff.
+
+## Inputs
+- Every generated markdown file in the package.
+- Any JSON config or state files.
+- The step-by-step guide and quickstart documents.
+
+## Step-by-step checks
+
+### Step 1: No hosted service requirements
+- [ ] No generated file requires a network connection for core workflow.
+- [ ] No generated file references a SaaS dashboard, hosted auth, or cloud backend for the planning workflow.
+- [ ] No phase prompt or build instruction asks the agent to sign up for a service.
+
+### Step 2: No database/auth/SaaS requirements
+- [ ] Core workflow does not require a database unless the project explicitly needs it.
+- [ ] Core workflow does not require authentication unless the project explicitly needs it.
+- [ ] Core workflow does not require a SaaS platform unless the project explicitly needs it.
+- [ ] If the project needs auth, database, or SaaS, the requirement is clearly scoped to the product, not the planning workflow.
+
+### Step 3: Markdown is the source of truth
+- [ ] All handoff files are readable markdown.
+- [ ] No binary or proprietary formats are required for review.
+- [ ] State and evidence are recorded in markdown or JSON, not hidden in chat history.
+- [ ] No evidence file is stored in a non-text format.
+
+### Step 4: File-based workflow
+- [ ] The package can be used entirely from local files.
+- [ ] The step-by-step guide does not require signing up for a service.
+- [ ] CLI commands reference local paths, not hosted URLs.
+- [ ] The package can be zipped and moved to another machine without loss of function.
+
+## Pass criteria
+Every check above passes and the package requires no external service to operate as a planning layer.
+
+## Fail criteria
+Any core workflow requires hosted services, database, auth, or SaaS infrastructure without explicit project justification.
+
+## Evidence to capture
+- File path and sentence that references a hosted service.
+- Whether the reference is in the planning workflow or correctly scoped to the product domain.
+- Recommended replacement text that keeps the workflow local.
+
+## Output location
+Record results in /regression-suite/REGRESSION_RESULTS_TEMPLATE.md under the local-first section.
+
+## Stop conditions
+Stop immediately if the planning workflow itself requires a hosted service. Product-specific requirements are acceptable only if clearly scoped and justified.
+- Recommended replacement text that keeps the workflow local.
+
+## Output location
+Record results in /regression-suite/REGRESSION_RESULTS_TEMPLATE.md under the local-first section.
+
+## Stop conditions
+Stop immediately if the planning workflow itself requires a hosted service. Product-specific requirements are acceptable only if clearly scoped and justified.
+`;
+}
+
+function buildRunAllScript(bundle: ProjectBundle) {
+  return `# run-all
+
+## What this file is for
+Run all regression scripts in order. Record results in /regression-suite/REGRESSION_RESULTS_TEMPLATE.md.
+
+## Procedure
+1. Follow /regression-suite/scripts/artifact-integrity.md.
+2. Follow /regression-suite/scripts/gate-consistency.md.
+3. Follow /regression-suite/scripts/evidence-quality.md.
+4. Follow /regression-suite/scripts/handoff-continuity.md.
+5. Follow /regression-suite/scripts/agent-rules.md.
+6. Follow /regression-suite/scripts/local-first.md.
+7. Record overall results in /regression-suite/REGRESSION_RESULTS_TEMPLATE.md.
+
+## Pass criteria
+All 6 scripts pass without unresolved failures.
+
+## Failure handling
+Record the failure, do not proceed to next phase or handoff, revise and re-run.
+`;
+}
+
 function createGeneratedFiles(bundle: ProjectBundle, input: ProjectInput, context: ProjectContext): GeneratedFile[] {
   const files: GeneratedFile[] = [];
   const add = (path: string, content: string) => {
@@ -2121,8 +7371,16 @@ function createGeneratedFiles(bundle: ProjectBundle, input: ProjectInput, contex
             ? 'Executive review note: treat unresolved business value, adoption, and operating-model questions as blockers until they are explicit.'
             : 'Review the brief, close the open questions, and then work the package in phase order.';
   const xeleraState = buildXeleraState(bundle);
+  const uiWorkflows = getUiWorkflowSet(input, context);
+  const uiScreens = getUiScreens(input, context, uiWorkflows);
 
   add('README.md', buildRootReadme(bundle, input));
+  add('BUSINESS_USER_START_HERE.md', buildBusinessUserStartHere(bundle, input));
+  add('CURRENT_STATUS.md', buildCurrentStatus(bundle, input, context));
+  add('COPY_PASTE_PROMPTS.md', buildCopyPastePrompts(input, bundle, context));
+  add('MODULE_MAP.md', buildModuleMap(input, context));
+  add('WHAT_TO_IGNORE_FOR_NOW.md', buildWhatToIgnoreForNow(bundle, input, context));
+  add('FINAL_CHECKLIST.md', buildFinalChecklist(bundle, input, context));
   add('QUICKSTART.md', buildPackageQuickstart(bundle, input));
   add('TROUBLESHOOTING.md', buildPackageTroubleshooting());
   add('START_HERE.md', buildPackageStartHere(bundle, input));
@@ -2132,6 +7390,67 @@ function createGeneratedFiles(bundle: ProjectBundle, input: ProjectInput, contex
   add('03_HOW_TO_USE_WITH_CLAUDE_CODE.md', buildHowToUseWithAgent('Claude Code'));
   add('04_HOW_TO_USE_WITH_OPENCODE.md', buildHowToUseWithAgent('OpenCode'));
   add('AGENTS.md', buildAgentsMd());
+  add('TESTING_STRATEGY.md', buildTestingStrategy(input, bundle, context));
+  add('REGRESSION_TEST_PLAN.md', buildRegressionTestPlan(input, bundle, context));
+  add('TEST_SCRIPT_INDEX.md', buildTestScriptIndex(bundle));
+  add('product-strategy/PRODUCT_STRATEGY_START_HERE.md', buildProductStrategyStartHere(input, context));
+  add('product-strategy/PRODUCT_NORTH_STAR.md', buildProductNorthStar(input, context));
+  add('product-strategy/TARGET_USERS.md', buildTargetUsers(input, context));
+  add('product-strategy/MVP_SCOPE.md', buildMvpScope(input, context));
+  add('product-strategy/OUT_OF_SCOPE.md', buildOutOfScope(input, context));
+  add('product-strategy/SUCCESS_METRICS.md', buildSuccessMetrics(input, context));
+  add('product-strategy/TRADEOFF_LOG.md', buildTradeoffLog(input, context));
+  add('product-strategy/PRODUCT_STRATEGY_GATE.md', buildProductStrategyGate());
+  add('requirements/REQUIREMENTS_START_HERE.md', buildRequirementsStartHere(input, context));
+  add('requirements/FUNCTIONAL_REQUIREMENTS.md', buildFunctionalRequirements(input, context));
+  add('requirements/NON_FUNCTIONAL_REQUIREMENTS.md', buildNonFunctionalRequirements(input, context));
+  add('requirements/ACCEPTANCE_CRITERIA.md', buildAcceptanceCriteria(input, context));
+  add('requirements/OPEN_QUESTIONS.md', buildOpenQuestions(input, context));
+  add('requirements/REQUIREMENTS_RISK_REVIEW.md', buildRequirementsRiskReview(input, context));
+  add('requirements/REQUIREMENTS_GATE.md', buildRequirementsGate());
+  add('security-risk/SECURITY_START_HERE.md', buildSecurityStartHere(input, context));
+  add('security-risk/DATA_CLASSIFICATION.md', buildDataClassification(input, context));
+  add('security-risk/SECRET_MANAGEMENT.md', buildSecretManagement(input, context));
+  add('security-risk/PRIVACY_RISK_REVIEW.md', buildPrivacyRiskReview(input, context));
+  add('security-risk/AUTHORIZATION_REVIEW.md', buildAuthorizationReview(input, context));
+  add('security-risk/DEPENDENCY_RISK_CHECKLIST.md', buildDependencyRiskChecklist());
+  add('security-risk/SECURITY_GATE.md', buildSecurityGate());
+  add('integrations/INTEGRATION_START_HERE.md', buildIntegrationStartHere(input, context));
+  add('integrations/EXTERNAL_SERVICES.md', buildExternalServices(input, context));
+  add('integrations/API_KEYS_AND_SECRETS.md', buildApiKeysAndSecrets(input, context));
+  add('integrations/ENVIRONMENT_VARIABLES.md', buildEnvironmentVariables(input, context));
+  add('integrations/WEBHOOKS.md', buildWebhooks(input, context));
+  add('integrations/FAILURE_MODES.md', buildIntegrationFailureModes());
+  add('integrations/MOCKING_STRATEGY.md', buildMockingStrategy(input, context));
+  add('integrations/INTEGRATION_TEST_PLAN.md', buildIntegrationTestPlan(input, context));
+  add('integrations/INTEGRATION_GATE.md', buildIntegrationGate());
+  add('architecture/ARCHITECTURE_START_HERE.md', buildArchitectureStartHere(input, context));
+  add('architecture/SYSTEM_OVERVIEW.md', buildSystemOverview(input, context));
+  add('architecture/DATA_MODEL.md', buildDataModel(input, context));
+  add('architecture/API_CONTRACTS.md', buildApiContracts(input, context));
+  add('architecture/STATE_MANAGEMENT.md', buildStateManagement(input, context));
+  add('architecture/ARCHITECTURE_DECISIONS.md', buildArchitectureDecisions(input, context));
+  add('architecture/ARCHITECTURE_GATE.md', buildArchitectureGate());
+  add('ui-ux/UI_UX_START_HERE.md', buildUiUxStartHere(input, context, uiWorkflows));
+  add('ui-ux/USER_WORKFLOWS.md', `# USER_WORKFLOWS\n\n${uiWorkflows.map(renderUiWorkflowMarkdown).join('\n')}`);
+  add('ui-ux/SCREEN_INVENTORY.md', `# SCREEN_INVENTORY\n\n${uiScreens.map(renderUiScreenMarkdown).join('\n')}`);
+  add('ui-ux/UX_REVIEW_CHECKLIST.md', buildUxReviewChecklist(context));
+  add('ui-ux/UI_IMPLEMENTATION_GUIDE.md', buildUiImplementationGuide(input, context, uiScreens));
+  add('ui-ux/ACCESSIBILITY_CHECKLIST.md', buildAccessibilityChecklist());
+  add('ui-ux/RESPONSIVE_DESIGN_CHECKLIST.md', buildResponsiveChecklist());
+  add('ui-ux/SCREENSHOT_REVIEW_PROMPT.md', buildScreenshotReviewPrompt(input, context));
+  add('ui-ux/UI_UX_GATE.md', buildUiUxGate(context));
+  add('ui-ux/UI_UX_HANDOFF.md', buildUiUxHandoff());
+  add('recursive-test/RECURSIVE_TEST_START_HERE.md', buildRecursiveStartHere());
+  add('recursive-test/RECURSIVE_TEST_PROMPT.md', buildRecursivePrompt());
+  add('recursive-test/SCORING_RUBRIC.md', buildScoringRubric());
+  add('recursive-test/TEST_CASE_SELECTION_GUIDE.md', buildTestCaseSelectionGuide());
+  add('recursive-test/ITERATION_LOG.md', buildIterationLog());
+  add('recursive-test/FAILURE_TAXONOMY.md', buildFailureTaxonomy());
+  add('recursive-test/RECURSIVE_TEST_REPORT.md', buildRecursiveReport());
+  add('recursive-test/RECURSIVE_FIX_GUIDE.md', buildRecursiveFixGuide());
+  add('recursive-test/REGRESSION_RECHECK_GUIDE.md', buildRegressionRecheckGuide());
+  add('recursive-test/FINAL_QUALITY_GATE.md', buildFinalQualityGate());
   add('CODEX_START_HERE.md', buildRootAgentStart('Codex', input, bundle, context));
   add('CLAUDE_START_HERE.md', buildRootAgentStart('Claude Code', input, bundle, context));
   add('OPENCODE_START_HERE.md', buildRootAgentStart('OpenCode', input, bundle, context));
@@ -2334,46 +7653,7 @@ Review the open confirmation items, then start phase 1 with the current brief an
 `
   );
 
-  add(
-    'STEP_BY_STEP_BUILD_GUIDE.md',
-    `# STEP_BY_STEP_BUILD_GUIDE
-
-## Package status
-${bundle.lifecycleStatus}
-
-${statusSummary}
-
-## Mode-specific guidance
-${modeGuideIntro}
-
-1. Read PROJECT_BRIEF.md and restate ${input.productName} in your own words.
-2. Review QUESTIONNAIRE.md and PLAN_CRITIQUE.md so you know which parts are based on the current project information, which still need confirmation, and which are inferred assumptions.
-3. Confirm the SCORECARD.md blockers list is empty or explicitly accepted.
-4. Work phase-by-phase in the order listed in PHASE_PLAN.md.
-5. For phase 1, verify the brief, profile, audience, constraints, and desired output are present before moving on.
-6. For phase 2 and later, require the previous phase handoff, previous exit gate, blocker log, and scope-change log before starting.
-7. During each phase, keep the files tied to ${context.primaryAudience}, ${context.primaryFeature}, and ${context.outputAnchor}.
-8. When you need a coding prompt or review prompt, ask your coding AI to draft one from the current phase goal, constraints, and acceptance criteria.
-9. Before final handoff, revisit SCORECARD.md and confirm that the package still matches the actual scope and unresolved risks.
-10. Hand the package to Codex, Claude, Cursor, or a human development team as the implementation source of truth.
-
-## Assumptions and open questions
-### Assumptions
-${listToBullets(assumptionsAndQuestions.assumptions, 'Inferred assumption: none recorded.')}
-
-### Open questions
-${listToBullets(assumptionsAndQuestions.openQuestions, 'Please review and confirm: no open questions recorded.')}
-
-## Unresolved warnings
-${listToBullets(bundle.unresolvedWarnings.map((warning) => `[${warning.severity}] ${warning.title}: ${warning.message}`), 'No unresolved warnings recorded.')}
-
-## Status meaning
-- Draft: export is allowed for planning review, but the package is not yet ready for human build approval.
-- Blocked: export is allowed for diagnosis and review, but blocker warnings prevent a build-ready package.
-- ReviewReady: the package is complete enough for human approval review, but it is not yet approved for build.
-- ApprovedForBuild: the package contains explicit approval metadata and can be treated as build-approved.
-`
-  );
+  add('STEP_BY_STEP_BUILD_GUIDE.md', buildStepByStepGuide(bundle, input, context, statusSummary, assumptionsAndQuestions, modeGuideIntro));
 
   add(
     'QUESTIONNAIRE.md',
@@ -2479,12 +7759,14 @@ ${listToBullets(bundle.unresolvedWarnings.map((warning) => `[${warning.severity}
     add(`phases/${phase.slug}/CLAUDE_BUILD_PROMPT.md`, buildAgentPrompt('Claude Code', phase, input, context));
     add(`phases/${phase.slug}/OPENCODE_BUILD_PROMPT.md`, buildAgentPrompt('OpenCode', phase, input, context));
     add(`phases/${phase.slug}/VERIFY_PROMPT.md`, buildVerifyPrompt(phase, bundle, input));
-    add(`phases/${phase.slug}/VERIFICATION_REPORT.md`, buildVerificationReport(phase));
-    add(`phases/${phase.slug}/EVIDENCE_CHECKLIST.md`, buildEvidenceChecklist(phase));
-    add(`phases/${phase.slug}/EXIT_GATE.md`, buildPhaseExitGate(phase));
+    add(`phases/${phase.slug}/VERIFICATION_REPORT.md`, buildVerificationReport(phase, input));
+    add(`phases/${phase.slug}/EVIDENCE_CHECKLIST.md`, buildEvidenceChecklist(phase, input));
+    add(`phases/${phase.slug}/EXIT_GATE.md`, buildPhaseExitGate(phase, context));
     add(`phases/${phase.slug}/TEST_PLAN.md`, buildPhaseTestPlan(phase));
-    add(`phases/${phase.slug}/HANDOFF_SUMMARY.md`, buildPhaseHandoffSummary(phase));
-    add(`phases/${phase.slug}/NEXT_PHASE_CONTEXT.md`, buildNextPhaseContext(phase, nextPhase));
+    add(`phases/${phase.slug}/TEST_SCRIPT.md`, buildPhaseTestScript(phase, input, context));
+    add(`phases/${phase.slug}/TEST_RESULTS.md`, buildPhaseTestResults(phase));
+    add(`phases/${phase.slug}/HANDOFF_SUMMARY.md`, buildPhaseHandoffSummary(phase, input, context));
+    add(`phases/${phase.slug}/NEXT_PHASE_CONTEXT.md`, buildNextPhaseContext(phase, nextPhase, input, context));
     add(
       `gates/gate-${gateNumber}-entry.md`,
       `# Gate ${gateNumber} Entry
@@ -2515,10 +7797,15 @@ ${phase.name}
 
 ## This phase is ready only when
 ${phase.exitCriteria.map((item) => `- ${item}`).join('\n')}
-- Existing functionality and previously completed phase outputs still work, or any regression is documented as a blocker.
+
+## Concrete expected outputs
+${phase.expectedOutputs.map((item) => `- ${item}`).join('\n')}
 
 ## Required evidence
-${phase.testingRequirements.map((item) => `- ${item}`).join('\n')}
+${phase.evidenceExamples.map((item) => `- ${item}`).join('\n')}
+
+## Failure or blocker conditions
+${phase.failureConditions.map((item) => `- ${item}`).join('\n')}
 
 ## What you should do next
 - Review this checklist before calling the phase complete.
@@ -2526,6 +7813,20 @@ ${phase.testingRequirements.map((item) => `- ${item}`).join('\n')}
 `
     );
   });
+
+  add('regression-suite/README.md', buildRegressionSuiteReadme(input, bundle, context));
+  add('regression-suite/RUN_REGRESSION.md', buildRegressionRun(input, bundle, context));
+  add('regression-suite/REGRESSION_CHECKLIST.md', buildRegressionChecklist(input, bundle, context));
+  add('regression-suite/REGRESSION_RESULTS_TEMPLATE.md', buildRegressionResultsTemplate(input));
+  add('regression-suite/scripts/README.md', buildRegressionScriptsReadme());
+  add('regression-suite/scripts/run-all.md', buildRunAllScript(bundle));
+  add('regression-suite/scripts/artifact-integrity.md', buildArtifactIntegrityScript(input, bundle, context));
+  add('regression-suite/scripts/gate-consistency.md', buildGateConsistencyScript(input, bundle, context));
+  add('regression-suite/scripts/evidence-quality.md', buildEvidenceQualityScript(input, bundle, context));
+  add('regression-suite/scripts/handoff-continuity.md', buildHandoffContinuityScript(input, bundle, context));
+  add('regression-suite/scripts/agent-rules.md', buildAgentRulesScript(input));
+  add('regression-suite/scripts/local-first.md', buildLocalFirstScript(input, context));
+  add('regression-suite/scripts/run-regression.ts', buildRunnableRegressionScript());
 
   return files;
 }
@@ -2536,14 +7837,15 @@ export function generateProjectBundle(input: ProjectInput): ProjectBundle {
   const context = buildContext(input);
   const critique = buildCritique(input, questionnaire, context);
   const phases = buildPhasePlan(input, context, critique);
-  const score = scoreProject(input, questionnaire, critique);
-  const warnings = buildWarnings(input, questionnaire, critique, context, score);
+  const rawScore = scoreProject(input, questionnaire, critique);
+  const warnings = buildWarnings(input, questionnaire, critique, context, rawScore);
   const { approvalRequired, approvedForBuild } = getApprovalFlags(input);
   const lifecycleStatus = deriveLifecycleStatus({
     warnings,
-    scoreTotal: score.total,
+    scoreTotal: rawScore.total,
     approvedForBuild
   });
+  const score = reconcileScoreWithLifecycle(rawScore, lifecycleStatus, warnings);
   const warningCounts: Record<WarningSeverity, number> = {
     info: warnings.filter((warning) => warning.severity === 'info').length,
     warning: warnings.filter((warning) => warning.severity === 'warning').length,

@@ -92,6 +92,7 @@ async function main() {
   const handoff = getFile(bundle, 'HANDOFF.md');
   const approvalGate = getFile(bundle, '00_APPROVAL_GATE.md');
   const startHere = getFile(bundle, 'START_HERE.md');
+  const scorecard = getFile(bundle, 'SCORECARD.md');
   const readme = fs.readFileSync(path.resolve('README.md'), 'utf8');
   const manifest = JSON.parse(getFile(bundle, 'repo/manifest.json'));
   const state = JSON.parse(getFile(bundle, 'repo/xelera-state.json'));
@@ -99,6 +100,12 @@ async function main() {
 
   assert(bundle.phases.length >= 10, `Expected at least 10 phases, received ${bundle.phases.length}`);
   assert(bundle.files.some((file) => file.path === 'README.md'), 'Missing package README.md');
+  assert(bundle.files.some((file) => file.path === 'BUSINESS_USER_START_HERE.md'), 'Missing BUSINESS_USER_START_HERE.md');
+  assert(bundle.files.some((file) => file.path === 'CURRENT_STATUS.md'), 'Missing CURRENT_STATUS.md');
+  assert(bundle.files.some((file) => file.path === 'COPY_PASTE_PROMPTS.md'), 'Missing COPY_PASTE_PROMPTS.md');
+  assert(bundle.files.some((file) => file.path === 'MODULE_MAP.md'), 'Missing MODULE_MAP.md');
+  assert(bundle.files.some((file) => file.path === 'WHAT_TO_IGNORE_FOR_NOW.md'), 'Missing WHAT_TO_IGNORE_FOR_NOW.md');
+  assert(bundle.files.some((file) => file.path === 'FINAL_CHECKLIST.md'), 'Missing FINAL_CHECKLIST.md');
   assert(bundle.files.some((file) => file.path === 'QUICKSTART.md'), 'Missing package QUICKSTART.md');
   assert(bundle.files.some((file) => file.path === 'TROUBLESHOOTING.md'), 'Missing package TROUBLESHOOTING.md');
   assert(bundle.files.some((file) => file.path === 'START_HERE.md'), 'Missing START_HERE.md');
@@ -117,6 +124,85 @@ async function main() {
   assert(bundle.files.some((file) => file.path === '03_HOW_TO_USE_WITH_CLAUDE_CODE.md'), 'Missing 03_HOW_TO_USE_WITH_CLAUDE_CODE.md');
   assert(bundle.files.some((file) => file.path === '04_HOW_TO_USE_WITH_OPENCODE.md'), 'Missing 04_HOW_TO_USE_WITH_OPENCODE.md');
   assert(bundle.files.some((file) => file.path === 'AGENTS.md'), 'Missing AGENTS.md');
+  assert(bundle.files.some((file) => file.path === 'TESTING_STRATEGY.md'), 'Missing TESTING_STRATEGY.md');
+  assert(bundle.files.some((file) => file.path === 'REGRESSION_TEST_PLAN.md'), 'Missing REGRESSION_TEST_PLAN.md');
+  assert(bundle.files.some((file) => file.path === 'TEST_SCRIPT_INDEX.md'), 'Missing TEST_SCRIPT_INDEX.md');
+  assert(bundle.files.some((file) => file.path === 'ui-ux/UI_UX_START_HERE.md'), 'Missing ui-ux/UI_UX_START_HERE.md');
+  assert(bundle.files.some((file) => file.path === 'ui-ux/USER_WORKFLOWS.md'), 'Missing ui-ux/USER_WORKFLOWS.md');
+  assert(bundle.files.some((file) => file.path === 'ui-ux/SCREEN_INVENTORY.md'), 'Missing ui-ux/SCREEN_INVENTORY.md');
+  assert(bundle.files.some((file) => file.path === 'ui-ux/UX_REVIEW_CHECKLIST.md'), 'Missing ui-ux/UX_REVIEW_CHECKLIST.md');
+  assert(bundle.files.some((file) => file.path === 'ui-ux/UI_IMPLEMENTATION_GUIDE.md'), 'Missing ui-ux/UI_IMPLEMENTATION_GUIDE.md');
+  assert(bundle.files.some((file) => file.path === 'ui-ux/ACCESSIBILITY_CHECKLIST.md'), 'Missing ui-ux/ACCESSIBILITY_CHECKLIST.md');
+  assert(bundle.files.some((file) => file.path === 'ui-ux/RESPONSIVE_DESIGN_CHECKLIST.md'), 'Missing ui-ux/RESPONSIVE_DESIGN_CHECKLIST.md');
+  assert(bundle.files.some((file) => file.path === 'ui-ux/SCREENSHOT_REVIEW_PROMPT.md'), 'Missing ui-ux/SCREENSHOT_REVIEW_PROMPT.md');
+  assert(bundle.files.some((file) => file.path === 'ui-ux/UI_UX_GATE.md'), 'Missing ui-ux/UI_UX_GATE.md');
+  assert(bundle.files.some((file) => file.path === 'ui-ux/UI_UX_HANDOFF.md'), 'Missing ui-ux/UI_UX_HANDOFF.md');
+  assert(bundle.files.some((file) => file.path === 'recursive-test/RECURSIVE_TEST_START_HERE.md'), 'Missing recursive-test/RECURSIVE_TEST_START_HERE.md');
+  assert(bundle.files.some((file) => file.path === 'recursive-test/RECURSIVE_TEST_PROMPT.md'), 'Missing recursive-test/RECURSIVE_TEST_PROMPT.md');
+  assert(bundle.files.some((file) => file.path === 'recursive-test/SCORING_RUBRIC.md'), 'Missing recursive-test/SCORING_RUBRIC.md');
+  assert(bundle.files.some((file) => file.path === 'recursive-test/TEST_CASE_SELECTION_GUIDE.md'), 'Missing recursive-test/TEST_CASE_SELECTION_GUIDE.md');
+  assert(bundle.files.some((file) => file.path === 'recursive-test/ITERATION_LOG.md'), 'Missing recursive-test/ITERATION_LOG.md');
+  assert(bundle.files.some((file) => file.path === 'recursive-test/FAILURE_TAXONOMY.md'), 'Missing recursive-test/FAILURE_TAXONOMY.md');
+  assert(bundle.files.some((file) => file.path === 'recursive-test/RECURSIVE_TEST_REPORT.md'), 'Missing recursive-test/RECURSIVE_TEST_REPORT.md');
+  assert(bundle.files.some((file) => file.path === 'recursive-test/RECURSIVE_FIX_GUIDE.md'), 'Missing recursive-test/RECURSIVE_FIX_GUIDE.md');
+  assert(bundle.files.some((file) => file.path === 'recursive-test/REGRESSION_RECHECK_GUIDE.md'), 'Missing recursive-test/REGRESSION_RECHECK_GUIDE.md');
+  assert(bundle.files.some((file) => file.path === 'recursive-test/FINAL_QUALITY_GATE.md'), 'Missing recursive-test/FINAL_QUALITY_GATE.md');
+  const requiredHighPriorityModuleFiles = [
+    'product-strategy/PRODUCT_STRATEGY_START_HERE.md',
+    'product-strategy/PRODUCT_NORTH_STAR.md',
+    'product-strategy/TARGET_USERS.md',
+    'product-strategy/MVP_SCOPE.md',
+    'product-strategy/OUT_OF_SCOPE.md',
+    'product-strategy/SUCCESS_METRICS.md',
+    'product-strategy/TRADEOFF_LOG.md',
+    'product-strategy/PRODUCT_STRATEGY_GATE.md',
+    'requirements/REQUIREMENTS_START_HERE.md',
+    'requirements/FUNCTIONAL_REQUIREMENTS.md',
+    'requirements/NON_FUNCTIONAL_REQUIREMENTS.md',
+    'requirements/ACCEPTANCE_CRITERIA.md',
+    'requirements/OPEN_QUESTIONS.md',
+    'requirements/REQUIREMENTS_RISK_REVIEW.md',
+    'requirements/REQUIREMENTS_GATE.md',
+    'security-risk/SECURITY_START_HERE.md',
+    'security-risk/DATA_CLASSIFICATION.md',
+    'security-risk/SECRET_MANAGEMENT.md',
+    'security-risk/PRIVACY_RISK_REVIEW.md',
+    'security-risk/AUTHORIZATION_REVIEW.md',
+    'security-risk/DEPENDENCY_RISK_CHECKLIST.md',
+    'security-risk/SECURITY_GATE.md',
+    'integrations/INTEGRATION_START_HERE.md',
+    'integrations/EXTERNAL_SERVICES.md',
+    'integrations/API_KEYS_AND_SECRETS.md',
+    'integrations/ENVIRONMENT_VARIABLES.md',
+    'integrations/WEBHOOKS.md',
+    'integrations/FAILURE_MODES.md',
+    'integrations/MOCKING_STRATEGY.md',
+    'integrations/INTEGRATION_TEST_PLAN.md',
+    'integrations/INTEGRATION_GATE.md',
+    'architecture/ARCHITECTURE_START_HERE.md',
+    'architecture/SYSTEM_OVERVIEW.md',
+    'architecture/DATA_MODEL.md',
+    'architecture/API_CONTRACTS.md',
+    'architecture/STATE_MANAGEMENT.md',
+    'architecture/ARCHITECTURE_DECISIONS.md',
+    'architecture/ARCHITECTURE_GATE.md'
+  ];
+  for (const filePath of requiredHighPriorityModuleFiles) {
+    assert(bundle.files.some((file) => file.path === filePath), `Missing required high-priority module file ${filePath}`);
+  }
+  assert(bundle.files.some((file) => file.path === 'regression-suite/README.md'), 'Missing regression-suite/README.md');
+  assert(bundle.files.some((file) => file.path === 'regression-suite/RUN_REGRESSION.md'), 'Missing regression-suite/RUN_REGRESSION.md');
+  assert(bundle.files.some((file) => file.path === 'regression-suite/REGRESSION_CHECKLIST.md'), 'Missing regression-suite/REGRESSION_CHECKLIST.md');
+  assert(bundle.files.some((file) => file.path === 'regression-suite/REGRESSION_RESULTS_TEMPLATE.md'), 'Missing regression-suite/REGRESSION_RESULTS_TEMPLATE.md');
+  assert(bundle.files.some((file) => file.path === 'regression-suite/scripts/README.md'), 'Missing regression-suite/scripts/README.md');
+  assert(bundle.files.some((file) => file.path === 'regression-suite/scripts/run-all.md'), 'Missing regression-suite/scripts/run-all.md');
+  assert(bundle.files.some((file) => file.path === 'regression-suite/scripts/run-regression.ts'), 'Missing regression-suite/scripts/run-regression.ts');
+  assert(bundle.files.some((file) => file.path === 'regression-suite/scripts/artifact-integrity.md'), 'Missing regression-suite/scripts/artifact-integrity.md');
+  assert(bundle.files.some((file) => file.path === 'regression-suite/scripts/gate-consistency.md'), 'Missing regression-suite/scripts/gate-consistency.md');
+  assert(bundle.files.some((file) => file.path === 'regression-suite/scripts/evidence-quality.md'), 'Missing regression-suite/scripts/evidence-quality.md');
+  assert(bundle.files.some((file) => file.path === 'regression-suite/scripts/handoff-continuity.md'), 'Missing regression-suite/scripts/handoff-continuity.md');
+  assert(bundle.files.some((file) => file.path === 'regression-suite/scripts/agent-rules.md'), 'Missing regression-suite/scripts/agent-rules.md');
+  assert(bundle.files.some((file) => file.path === 'regression-suite/scripts/local-first.md'), 'Missing regression-suite/scripts/local-first.md');
   assert(bundle.files.some((file) => file.path === 'repo/xelera-state.json'), 'Missing repo/xelera-state.json');
   assert(fs.existsSync(familySamplePath), 'Missing examples/family-task-app.json');
   assert(fs.existsSync(path.resolve('docs/NOVICE_GUIDE.md')), 'Missing docs/NOVICE_GUIDE.md');
@@ -140,6 +226,32 @@ async function main() {
   assert(/Previous phase handoff complete\./.test(gate02), 'Phase 2 gate did not include previous phase handoff.');
 
   const phasePlan = getFile(bundle, 'PHASE_PLAN.md');
+  const businessStart = getFile(bundle, 'BUSINESS_USER_START_HERE.md');
+  const currentStatus = getFile(bundle, 'CURRENT_STATUS.md');
+  const promptGuide = getFile(bundle, 'COPY_PASTE_PROMPTS.md');
+  const moduleMap = getFile(bundle, 'MODULE_MAP.md');
+  const ignoreGuide = getFile(bundle, 'WHAT_TO_IGNORE_FOR_NOW.md');
+  const finalChecklist = getFile(bundle, 'FINAL_CHECKLIST.md');
+  const uiStart = getFile(bundle, 'ui-ux/UI_UX_START_HERE.md');
+  const uiScreenshotPrompt = getFile(bundle, 'ui-ux/SCREENSHOT_REVIEW_PROMPT.md');
+  const uiGate = getFile(bundle, 'ui-ux/UI_UX_GATE.md');
+  const recursiveStart = getFile(bundle, 'recursive-test/RECURSIVE_TEST_START_HERE.md');
+  const recursivePrompt = getFile(bundle, 'recursive-test/RECURSIVE_TEST_PROMPT.md');
+  const recursiveRubric = getFile(bundle, 'recursive-test/SCORING_RUBRIC.md');
+  const recursiveReport = getFile(bundle, 'recursive-test/RECURSIVE_TEST_REPORT.md');
+  const phaseBrief = getFile(bundle, 'phases/phase-01/PHASE_BRIEF.md');
+  const verifyPrompt = getFile(bundle, 'phases/phase-01/VERIFY_PROMPT.md');
+  const generatedReadme = getFile(bundle, 'README.md');
+  const productNorthStar = getFile(bundle, 'product-strategy/PRODUCT_NORTH_STAR.md');
+  const mvpScope = getFile(bundle, 'product-strategy/MVP_SCOPE.md');
+  const acceptanceCriteria = getFile(bundle, 'requirements/ACCEPTANCE_CRITERIA.md');
+  const openQuestions = getFile(bundle, 'requirements/OPEN_QUESTIONS.md');
+  const dataClassification = getFile(bundle, 'security-risk/DATA_CLASSIFICATION.md');
+  const secretManagement = getFile(bundle, 'security-risk/SECRET_MANAGEMENT.md');
+  const environmentVariables = getFile(bundle, 'integrations/ENVIRONMENT_VARIABLES.md');
+  const mockingStrategy = getFile(bundle, 'integrations/MOCKING_STRATEGY.md');
+  const systemOverview = getFile(bundle, 'architecture/SYSTEM_OVERVIEW.md');
+  const dataModel = getFile(bundle, 'architecture/DATA_MODEL.md');
   assert(
     /technical product owners/i.test(phasePlan) || /AI-assisted builders/i.test(phasePlan),
     'Generated phases did not include project-specific audience terms.'
@@ -149,15 +261,61 @@ async function main() {
     'Handoff output did not reflect the sample project language.'
   );
   assert(/## What this package is/.test(startHere), 'START_HERE.md missing package explanation.');
+  assert(/do not need to open every folder/i.test(startHere), 'START_HERE.md should tell the user not to open every folder.');
   assert(/## Commands to know/.test(startHere), 'START_HERE.md missing command guidance.');
   assert(/Entry gate:/.test(startHere) && /Exit gate:/.test(startHere), 'START_HERE.md missing gate definitions.');
   assert(/## Package status/.test(guide), 'Final guide did not include package status.');
   assert(/## Assumptions and open questions/.test(guide), 'Final guide did not include assumptions and open questions.');
-  assert(
-    /Which entities, interfaces, integrations, or file boundaries must be explicit before coding begins\?/i.test(guide),
-    'Missing critical answer warning did not appear in the final guide.'
-  );
+  assert(/## 1\. Decide/.test(guide) && /## 2\. Plan/.test(guide) && /## 3\. Design/.test(guide) && /## 4\. Build/.test(guide) && /## 5\. Test/.test(guide) && /## 6\. Handoff/.test(guide), 'STEP_BY_STEP_BUILD_GUIDE.md should use Decide / Plan / Design / Build / Test / Handoff.');
+  assert(/Product Goal and Scope/i.test(guide) && /What the App Must Do/i.test(guide), 'STEP_BY_STEP_BUILD_GUIDE.md should fold the new Decide support modules into Decide.');
+  assert(/Private Data and Safety Check/i.test(guide) && /External Services and Setup/i.test(guide) && /Technical Plan/i.test(guide), 'STEP_BY_STEP_BUILD_GUIDE.md should fold the new Plan support modules into Plan.');
+  assert(/Screen and Workflow Review/i.test(businessStart), 'Beginner-facing docs should describe UI/UX as Screen and Workflow Review.');
+  assert(/Improve Until Good Enough Loop/i.test(businessStart), 'Beginner-facing docs should describe recursive testing as Improve Until Good Enough Loop.');
+  assert(/For you:/i.test(businessStart) && /Mostly for the AI agent:/i.test(businessStart), 'BUSINESS_USER_START_HERE.md should distinguish user files from AI-agent files.');
+  assert(/Product Goal and Scope/i.test(businessStart) && /What the App Must Do/i.test(businessStart) && /Private Data and Safety Check/i.test(businessStart) && /External Services and Setup/i.test(businessStart) && /Technical Plan/i.test(businessStart), 'BUSINESS_USER_START_HERE.md should use the beginner-friendly names for the new modules.');
+  assert(/## Required/.test(moduleMap) && /## Recommended/.test(moduleMap) && /## Optional/.test(moduleMap) && /## Not needed now/.test(moduleMap), 'MODULE_MAP.md should include Required / Recommended / Optional / Not needed now.');
+  assert(/Product Goal and Scope/i.test(moduleMap) && /What the App Must Do/i.test(moduleMap) && /Private Data and Safety Check/i.test(moduleMap) && /External Services and Setup/i.test(moduleMap) && /Technical Plan/i.test(moduleMap), 'MODULE_MAP.md should include the new user-facing module names.');
+  assert(/## 1\. Decide/.test(promptGuide) && /## 2\. Plan/.test(promptGuide) && /## 3\. Design/.test(promptGuide) && /## 4\. Build/.test(promptGuide) && /## 5\. Test/.test(promptGuide) && /## 6\. Handoff/.test(promptGuide), 'COPY_PASTE_PROMPTS.md should include prompts in order.');
+  assert(/Confirm Product Goal and Scope/i.test(promptGuide) && /Confirm What the App Must Do/i.test(promptGuide) && /Review Private Data and Safety/i.test(promptGuide) && /Review External Services and Setup/i.test(promptGuide) && /Review Technical Plan/i.test(promptGuide), 'COPY_PASTE_PROMPTS.md should include the new module prompts.');
+  assert(/Safe to ignore right now/i.test(ignoreGuide), 'WHAT_TO_IGNORE_FOR_NOW.md should tell users what they can ignore for now.');
+  assert(/## Current stage/.test(currentStatus) && /## Current gate/.test(currentStatus) && /## Next action/.test(currentStatus), 'CURRENT_STATUS.md should show the current stage, gate, and next action.');
+  assert(/Before you call this project done/i.test(finalChecklist), 'FINAL_CHECKLIST.md should be plain-English and business-user friendly.');
+  assert(/ui-ux\/UI_UX_START_HERE\.md/i.test(startHere), 'START_HERE.md should reference the UI/UX module.');
+  assert(/recursive-test\/RECURSIVE_TEST_START_HERE\.md/i.test(startHere), 'START_HERE.md should reference the recursive test module.');
+  assert(/UI\/UX review timing/i.test(guide), 'STEP_BY_STEP_BUILD_GUIDE.md should explain UI/UX timing.');
+  assert(/Recursive testing timing/i.test(guide), 'STEP_BY_STEP_BUILD_GUIDE.md should explain recursive testing timing.');
+  assert(/do not need to open every folder/i.test(generatedReadme), 'Generated README.md should still tell business users they do not need to open every folder.');
+  assert(/detailed support folders as guardrails/i.test(generatedReadme), 'Generated README.md should explain the role of the detailed support folders.');
+  assert(/ui-ux\/UI_UX_START_HERE\.md/i.test(generatedReadme), 'Generated README.md should reference the UI/UX module.');
+  assert(/recursive-test\/RECURSIVE_TEST_START_HERE\.md/i.test(generatedReadme), 'Generated README.md should reference the recursive test module.');
+  assert(/Plain-English product goal/i.test(productNorthStar) && /What success looks like/i.test(productNorthStar) && /What failure looks like/i.test(productNorthStar), 'Product strategy must include the required north-star sections.');
+  assert(/Must-have features/i.test(mvpScope) && /Should-have features/i.test(mvpScope) && /Later features/i.test(mvpScope) && /Explicit non-goals/i.test(mvpScope), 'Product strategy must include MVP scope sections.');
+  assert(/Clear pass\/fail check/i.test(acceptanceCriteria) && /Evidence required/i.test(acceptanceCriteria), 'Requirements must include acceptance criteria evidence.');
+  assert(/Unresolved assumption/i.test(openQuestions) && /Priority/i.test(openQuestions), 'Requirements must include open questions with priority.');
+  assert(/Data types handled/i.test(dataClassification) && /Sensitivity level/i.test(dataClassification), 'Security module must include data classification.');
+  assert(/Expected secrets/i.test(secretManagement) && /What must never be committed/i.test(secretManagement), 'Security module must include secret management.');
+  assert(/Variable name/i.test(environmentVariables) && /Local setup notes/i.test(environmentVariables), 'Integrations module must include environment variables.');
+  assert(/What to mock before real credentials exist/i.test(mockingStrategy) && /When to replace mocks with real services/i.test(mockingStrategy), 'Integrations module must include mocking strategy.');
+  assert(/Simple architecture summary/i.test(systemOverview) && /What is intentionally not included/i.test(systemOverview), 'Architecture module must include system overview.');
+  assert(/Entities/i.test(dataModel) && /Sample records/i.test(dataModel), 'Architecture module must include a data model.');
+  assert(/\/product-strategy\//i.test(phaseBrief) && /\/requirements\//i.test(phaseBrief), 'Relevant phase briefs should reference product strategy and requirements support folders.');
+  assert(/\/product-strategy\//i.test(verifyPrompt) || /\/requirements\//i.test(verifyPrompt), 'Relevant verify prompts should reference supporting modules when the phase changes scope or requirements.');
+  assert(/screenshot/i.test(uiStart) && /Codex, Claude Code, Kimi, or GLM/i.test(uiStart), 'UI_UX_START_HERE.md should include screenshot and multi-agent guidance.');
+  assert(/compare each screenshot/i.test(uiScreenshotPrompt) && /score each screen from 0 to 100/i.test(uiScreenshotPrompt), 'SCREENSHOT_REVIEW_PROMPT.md should require evidence-backed screenshot scoring.');
+  assert(/## Auto-fail conditions/i.test(uiGate) && /no screenshots provided for a ui project/i.test(uiGate), 'UI_UX_GATE.md should include required auto-fail conditions.');
+  assert(/Default target score/i.test(recursiveStart) && /90\/100/i.test(recursiveStart), 'RECURSIVE_TEST_START_HERE.md should include the default 90/100 target.');
+  assert(/Improve Until Good Enough Loop/i.test(recursiveStart), 'RECURSIVE_TEST_START_HERE.md should include the beginner-friendly recursive testing name.');
+  assert(/score each use case from 0 to 100/i.test(recursivePrompt), 'RECURSIVE_TEST_PROMPT.md should include 0-100 per-use-case scoring.');
+  assert(/overall score >= 90/i.test(recursivePrompt), 'RECURSIVE_TEST_PROMPT.md should include loop-until-target behavior.');
+  assert(/5 iterations/i.test(recursiveStart) || /max iterations/i.test(recursivePrompt), 'Recursive testing module should include max iteration guidance.');
+  assert(/## Score cap rules/i.test(recursiveRubric) && /max score 69/i.test(recursiveRubric), 'SCORING_RUBRIC.md should include score caps.');
+  assert(/## Per-use-case scores/i.test(recursiveReport), 'RECURSIVE_TEST_REPORT.md should include per-use-case scores.');
+  assert(/What prompt to paste/i.test(guide) && /What file gets updated/i.test(guide) && /What evidence is required/i.test(guide), 'STEP_BY_STEP_BUILD_GUIDE.md should include the required beginner stage details.');
   assert(bundle.lifecycleStatus === 'Blocked', `Expected sample bundle lifecycle status to be Blocked, received ${bundle.lifecycleStatus}`);
+  assert(bundle.score.total < 72, `Blocked package score should stay below build-ready threshold, received ${bundle.score.total}.`);
+  assert(bundle.score.rating !== 'Build ready' && bundle.score.rating !== 'Strong handoff', 'Blocked package should not claim build readiness.');
+  assert(!/## Rating\s+Build ready/i.test(scorecard), 'Blocked package SCORECARD should not say Build ready.');
+  assert(/blocked until/i.test(scorecard), 'Blocked package SCORECARD should explain that blockers cap readiness.');
   assert(/## Approval decision section/.test(approvalGate), 'Approval gate file did not include the approval decision section.');
   assert(
     /## Blocking issues/.test(approvalGate) && /## Non-blocking warnings/.test(approvalGate),
@@ -174,6 +332,7 @@ async function main() {
   );
   assert(Array.isArray(manifest.blockingWarnings), 'Manifest blocking warning list is missing.');
   assert(manifest.lifecycleStatus === bundle.lifecycleStatus, 'Manifest lifecycle status does not match the bundle.');
+  assert(manifest.rating === bundle.score.rating, 'Manifest rating should match the bundle score rating.');
   assert(manifest.approvalRequired === true, 'Manifest approvalRequired should be true.');
   assert(manifest.approvedForBuild === false, 'Sample package should not be approved for build.');
   assert(state.currentPhase === 1, `Expected xelera-state currentPhase to be 1, received ${state.currentPhase}`);
@@ -211,6 +370,8 @@ async function main() {
   const familyPhaseBrief = getFile(familyBundle, 'phases/phase-01/PHASE_BRIEF.md');
   const familyVerifyPrompt = getFile(familyBundle, 'phases/phase-01/VERIFY_PROMPT.md');
   const familyVerificationReport = getFile(familyBundle, 'phases/phase-01/VERIFICATION_REPORT.md');
+  const familyUiStart = getFile(familyBundle, 'ui-ux/UI_UX_START_HERE.md');
+  const familyWorkflows = getFile(familyBundle, 'ui-ux/USER_WORKFLOWS.md');
   assert(/Family Task Board/i.test(familyProjectBrief), 'Family sample brief should reference Family Task Board.');
   assert(/\[START_HERE\.md\]\(START_HERE\.md\)/.test(familyRootReadme), 'Family sample README should link to START_HERE.md.');
   assert(/\[QUICKSTART\.md\]\(QUICKSTART\.md\)/.test(familyRootReadme), 'Family sample README should link to QUICKSTART.md.');
@@ -223,6 +384,8 @@ async function main() {
   assert(/QUICKSTART\.md/.test(familyStartHere), 'Family sample START_HERE should point beginners to QUICKSTART.md.');
   assert(!/PATH_TO_THIS_PACKAGE/.test(familyStartHere), 'Family sample START_HERE should not use PATH_TO_THIS_PACKAGE.');
   assert(/What to paste into Codex/i.test(familyCodexStart), 'Family sample CODEX_START_HERE should clearly say what to paste into Codex.');
+  assert(/part of the core package/i.test(familyUiStart), 'UI projects should receive full UI/UX guidance.');
+  assert(/Parent creates and assigns a task/i.test(familyWorkflows), 'UI workflow generation should be project-specific for UI projects.');
   assert(/## What you should do now/i.test(familyPhaseBrief), 'Family sample PHASE_BRIEF should include a clear next action.');
   assert(/## Out of scope for this phase/i.test(familyPhaseBrief), 'Family sample PHASE_BRIEF should include an out-of-scope section.');
   assert(/## What evidence means/i.test(familyVerifyPrompt), 'Family sample VERIFY_PROMPT should explain what evidence means.');
@@ -230,6 +393,34 @@ async function main() {
   const familyGeneratedText = familyBundle.files.map((file) => file.content).join('\n');
   assert(!/Generated from current input/i.test(familyGeneratedText), 'Family sample package should not use "Generated from current input".');
   assert(!/Needs user confirmation/i.test(familyGeneratedText), 'Family sample package should not use "Needs user confirmation".');
+
+  const nonUiBundle = generateProjectBundle(
+    buildAnsweredInput({
+      productName: 'Operations Audit Playbook',
+      level: 'intermediate',
+      track: 'business',
+      productIdea: 'A markdown-first internal audit playbook that helps an operations team review process gaps and hand off remediation work without building a user-facing application.',
+      targetAudience: 'Operations managers, internal reviewers, and team leads.',
+      problemStatement: 'Audit notes are scattered and teams lose the remediation trail between review cycles.',
+      constraints: 'Keep everything local-first, markdown-first, and documentation-driven. No web app, dashboard, or portal in v1.',
+      desiredOutput: 'A structured audit playbook package with gates, handoffs, evidence checklists, and recursive quality review instructions.',
+      mustHaveFeatures: 'Audit checklist, remediation workflow, evidence capture, handoff notes, regression checks, recursive quality loop.',
+      dataAndIntegrations: 'Markdown files, local evidence files, and JSON state only.',
+      risks: 'Reviewers may skip evidence, remediation may drift, and the package may become generic.',
+      successMetrics: 'A reviewer can run the audit package end to end without a user-facing interface.',
+      nonGoals: 'No hosted app, no dashboard, no database, no auth.',
+      questionnaireAnswers: {
+        'north-star': 'The first release must prove that an internal audit package can be created, reviewed, and handed off without a UI.',
+        'primary-workflow': 'A reviewer opens the audit package, completes the checklist, records evidence, hands off remediation items, and closes the audit loop.',
+        'scope-cut': 'Keep the audit package and remediation workflow in v1. Defer any user-facing software.',
+        acceptance: 'A reviewer should be able to complete the audit package without extra chat context or a live interface.',
+        'operating-risks': 'The main risks are skipped evidence, vague remediation actions, and generic templates.'
+      }
+    })
+  );
+  const nonUiStart = getFile(nonUiBundle, 'ui-ux/UI_UX_START_HERE.md');
+  assert(/lightweight screen and workflow review placeholder/i.test(nonUiStart), 'Non-UI projects should still receive lightweight UI/UX guidance.');
+  assert(/not clearly ui-driven today/i.test(nonUiStart), 'Non-UI UI_UX_START_HERE.md should explain optional status.');
   assert(/Based on your answers so far/i.test(familyGeneratedText), 'Family sample package should use beginner-friendly "Based on your answers so far" wording.');
   assert(/Please review and confirm/i.test(familyGeneratedText), 'Family sample package should use beginner-friendly "Please review and confirm" wording.');
 
@@ -245,6 +436,8 @@ async function main() {
       `phases/${phase.slug}/EVIDENCE_CHECKLIST.md`,
       `phases/${phase.slug}/EXIT_GATE.md`,
       `phases/${phase.slug}/TEST_PLAN.md`,
+      `phases/${phase.slug}/TEST_SCRIPT.md`,
+      `phases/${phase.slug}/TEST_RESULTS.md`,
       `phases/${phase.slug}/HANDOFF_SUMMARY.md`,
       `phases/${phase.slug}/NEXT_PHASE_CONTEXT.md`
     ];
@@ -294,14 +487,90 @@ async function main() {
     assert(/## follow-up actions/.test(verificationReport), `VERIFICATION_REPORT.md missing follow-up actions for ${phase.slug}`);
     const phaseBrief = getFile(bundle, `phases/${phase.slug}/PHASE_BRIEF.md`);
     assert(/## Out of scope for this phase/.test(phaseBrief), `PHASE_BRIEF.md missing out-of-scope section for ${phase.slug}`);
+
+    const testScript = getFile(bundle, `phases/${phase.slug}/TEST_SCRIPT.md`);
+    assert(/## Commands or manual procedures/.test(testScript), `TEST_SCRIPT.md missing commands section for ${phase.slug}`);
+    assert(/## Pass\/fail criteria/.test(testScript), `TEST_SCRIPT.md missing pass/fail criteria for ${phase.slug}`);
+    assert(/## Failure handling/.test(testScript), `TEST_SCRIPT.md missing failure handling for ${phase.slug}`);
+    assert(/## Evidence recording/.test(testScript), `TEST_SCRIPT.md missing evidence recording for ${phase.slug}`);
+
+    const testResults = getFile(bundle, `phases/${phase.slug}/TEST_RESULTS.md`);
+    assert(/## Final result: pending/.test(testResults), `TEST_RESULTS.md should default to pending for ${phase.slug}`);
+    assert(/## Recommendation: pending/.test(testResults), `TEST_RESULTS.md recommendation should default to pending for ${phase.slug}`);
+    assert(!/## Final result: pass/.test(testResults), `TEST_RESULTS.md should NOT default to pass for ${phase.slug}`);
+    assert(!/## Final result: fail/.test(testResults), `TEST_RESULTS.md should NOT default to fail for ${phase.slug}`);
+
     const exitGate = getFile(bundle, `phases/${phase.slug}/EXIT_GATE.md`);
-    assert(/Existing functionality and previously completed phase outputs still work/i.test(exitGate), `EXIT_GATE.md missing regression check for ${phase.slug}`);
+    assert(/## Concrete expected outputs/.test(exitGate), `EXIT_GATE.md missing concrete expected outputs for ${phase.slug}`);
+    assert(/## Failure or blocker conditions/.test(exitGate), `EXIT_GATE.md missing failure or blocker conditions for ${phase.slug}`);
+    assert(/## Regression or continuity checks/.test(exitGate), `EXIT_GATE.md missing regression or continuity checks for ${phase.slug}`);
     const quickExitGate = getFile(bundle, `gates/gate-${String(phase.index).padStart(2, '0')}-exit.md`);
-    assert(/Existing functionality and previously completed phase outputs still work/i.test(quickExitGate), `Quick exit gate missing regression check for ${phase.slug}`);
+    assert(/## Concrete expected outputs/.test(quickExitGate), `Quick exit gate missing concrete expected outputs for ${phase.slug}`);
+    assert(/## Failure or blocker conditions/.test(quickExitGate), `Quick exit gate missing blocker conditions for ${phase.slug}`);
     assert(/## final decision/.test(verificationReport), `VERIFICATION_REPORT.md missing final decision for ${phase.slug}`);
     assert(/Selected result: pending/.test(verificationReport), `VERIFICATION_REPORT.md missing backward-compatible Selected result for ${phase.slug}`);
     assert(/Selected recommendation: pending/.test(verificationReport), `VERIFICATION_REPORT.md missing backward-compatible Selected recommendation for ${phase.slug}`);
   }
+
+  // Verify AGENTS.md includes Core Agent Operating Rules
+  const agentsMd = getFile(bundle, 'AGENTS.md');
+  assert(/## Core Agent Operating Rules/.test(agentsMd), 'AGENTS.md missing Core Agent Operating Rules heading.');
+  assert(/1\. Don't assume\. Don't hide confusion\. Surface tradeoffs\./.test(agentsMd), 'AGENTS.md missing rule 1.');
+  assert(/2\. Minimum code that solves the problem\. Nothing speculative\./.test(agentsMd), 'AGENTS.md missing rule 2.');
+  assert(/3\. Touch only what you must\. Clean up only your own mess\./.test(agentsMd), 'AGENTS.md missing rule 3.');
+  assert(/4\. Define success criteria\. Loop until verified\./.test(agentsMd), 'AGENTS.md missing rule 4.');
+
+  // Verify TESTING_STRATEGY.md is project-specific
+  const testingStrategy = getFile(bundle, 'TESTING_STRATEGY.md');
+  assert(/What testing means for this project/.test(testingStrategy), 'TESTING_STRATEGY.md missing what-testing-means section.');
+  assert(/Types of tests expected/.test(testingStrategy), 'TESTING_STRATEGY.md missing types of tests section.');
+  assert(/What must be tested after every phase/.test(testingStrategy), 'TESTING_STRATEGY.md missing after-every-phase section.');
+  assert(/What must be tested before moving to the next phase/.test(testingStrategy), 'TESTING_STRATEGY.md missing before-next-phase section.');
+  assert(/What must be tested before final package handoff/.test(testingStrategy), 'TESTING_STRATEGY.md missing before-final-handoff section.');
+  assert(/How to record evidence/.test(testingStrategy), 'TESTING_STRATEGY.md missing evidence recording section.');
+  assert(/What counts as unacceptable evidence/.test(testingStrategy), 'TESTING_STRATEGY.md missing unacceptable evidence section.');
+  assert(/How to handle failed tests/.test(testingStrategy), 'TESTING_STRATEGY.md missing failure handling section.');
+
+  // Verify REGRESSION_TEST_PLAN.md
+  const regressionTestPlan = getFile(bundle, 'REGRESSION_TEST_PLAN.md');
+  assert(/Project-wide regression checklist/.test(regressionTestPlan), 'REGRESSION_TEST_PLAN.md missing project-wide checklist.');
+  assert(/Artifact completeness/.test(regressionTestPlan), 'REGRESSION_TEST_PLAN.md missing artifact completeness.');
+  assert(/Agent operating rules/.test(regressionTestPlan), 'REGRESSION_TEST_PLAN.md missing agent operating rules.');
+  assert(/Gate consistency/.test(regressionTestPlan), 'REGRESSION_TEST_PLAN.md missing gate consistency.');
+  assert(/Evidence quality/.test(regressionTestPlan), 'REGRESSION_TEST_PLAN.md missing evidence quality.');
+  assert(/Handoff continuity/.test(regressionTestPlan), 'REGRESSION_TEST_PLAN.md missing handoff continuity.');
+  assert(/Local-first/.test(regressionTestPlan), 'REGRESSION_TEST_PLAN.md missing local-first checks.');
+
+  // Verify TEST_SCRIPT_INDEX.md references every phase
+  const testScriptIndex = getFile(bundle, 'TEST_SCRIPT_INDEX.md');
+  assert(/Generated phase test scripts/.test(testScriptIndex), 'TEST_SCRIPT_INDEX.md missing phase scripts listing.');
+  for (const phase of bundle.phases) {
+    assert(new RegExp(`phases/${phase.slug}/TEST_SCRIPT\\.md`).test(testScriptIndex), `TEST_SCRIPT_INDEX.md missing reference to ${phase.slug}/TEST_SCRIPT.md.`);
+  }
+  assert(/Regression suite/.test(testScriptIndex), 'TEST_SCRIPT_INDEX.md missing regression suite section.');
+
+  // Verify step-by-step guide mentions testing before verification
+  assert(/TEST_SCRIPT\.md/.test(guide), 'STEP_BY_STEP_BUILD_GUIDE.md should mention TEST_SCRIPT.md.');
+  assert(/TEST_RESULTS\.md/.test(guide), 'STEP_BY_STEP_BUILD_GUIDE.md should mention TEST_RESULTS.md.');
+  assert(/regression-suite/.test(guide), 'STEP_BY_STEP_BUILD_GUIDE.md should reference regression-suite.');
+  assert(/## 1\. Decide/.test(guide), 'STEP_BY_STEP_BUILD_GUIDE.md should include Decide stage.');
+  assert(/## 6\. Handoff/.test(guide), 'STEP_BY_STEP_BUILD_GUIDE.md should include Handoff stage.');
+
+  // Verify START_HERE.md mentions testing
+  assert(/TEST_SCRIPT\.md/.test(startHere), 'START_HERE.md should mention TEST_SCRIPT.md.');
+  assert(/TEST_RESULTS\.md/.test(startHere), 'START_HERE.md should mention TEST_RESULTS.md.');
+
+  // Verify regression suite files are project-specific
+  const regressionReadme = getFile(bundle, 'regression-suite/README.md');
+  assert(new RegExp(sample.productName).test(regressionReadme), 'regression-suite/README.md should reference the product name.');
+  const regressionRun = getFile(bundle, 'regression-suite/RUN_REGRESSION.md');
+  assert(/When to run this suite/.test(regressionRun), 'regression-suite/RUN_REGRESSION.md missing when-to-run section.');
+  const regressionChecklist = getFile(bundle, 'regression-suite/REGRESSION_CHECKLIST.md');
+  assert(/Agent operating rules/.test(regressionChecklist), 'regression-suite/REGRESSION_CHECKLIST.md missing agent rules section.');
+  assert(/1\. Don't assume/.test(regressionChecklist), 'regression-suite/REGRESSION_CHECKLIST.md missing rule 1 in checklist.');
+  const regressionResults = getFile(bundle, 'regression-suite/REGRESSION_RESULTS_TEMPLATE.md');
+  assert(/Overall result: pending/.test(regressionResults), 'REGRESSION_RESULTS_TEMPLATE.md should default to pending.');
+  assert(!/Overall result: pass/.test(regressionResults), 'REGRESSION_RESULTS_TEMPLATE.md should not default to pass.');
 
   const beginnerBusiness = generateProjectBundle(
     buildAnsweredInput({ level: 'beginner', track: 'business', productName: 'Mode Test BB' })
@@ -326,6 +595,443 @@ async function main() {
     /security|observability|failure modes|architecture/i.test(advancedPhase),
     'Advanced/technical output did not stay deeper and more technical.'
   );
+
+  const familyFixture = generateProjectBundle(familySample);
+  const privvyFixture = generateProjectBundle(
+    buildAnsweredInput({
+      productName: 'Privvy Family Readiness',
+      level: 'advanced',
+      track: 'business',
+      productIdea:
+        'A family readiness workspace that helps households organize emergency contacts, important documents, and clear next steps without overclaiming legal or emergency authority.',
+      targetAudience: 'Parent organizers, co-parents, trusted caregivers, and adult family members responsible for readiness plans.',
+      problemStatement:
+        'Families keep critical readiness information scattered across conversations and files, which causes confusion, outdated guidance, and unsafe assumptions during stressful moments.',
+      constraints:
+        'Keep the first release local-first and markdown-first. Avoid legal advice, avoid emergency-response overclaiming, and keep sensitive family information explicit and reviewable.',
+      mustHaveFeatures:
+        'Readiness overview, emergency contact list, document checklist, household roles, caveat notes, emergency-mode boundaries, handoff workflow.',
+      dataAndIntegrations:
+        'Family members, emergency contacts, document references, readiness notes, boundary disclaimers, and optional document links.',
+      risks:
+        'Emergency mode could overclaim authority, the package could sound like legal advice, privacy matters, and outdated family information could create false confidence.',
+      successMetrics:
+        'A reviewer can see what the product helps with, what it explicitly does not do, and what family readiness caveats must stay visible.',
+      nonGoals:
+        'No legal advice, no emergency dispatch integration, no cloud backend, no automatic document filing.',
+      questionnaireAnswers: {
+        'north-star':
+          'The first release must help a family organize readiness information while clearly stating the limits of the tool.',
+        'primary-workflow':
+          'A parent organizer sets up the family readiness workspace, records key contacts and documents, reviews emergency notes, and shares clear role expectations with other adults.',
+        'scope-cut':
+          'Keep household readiness notes, boundary disclaimers, and family-role summaries in v1. Defer outside integrations and anything that looks like legal decision-making.',
+        acceptance:
+          'A skeptical reviewer should be able to see the emergency boundaries, the legal caveats, and the core family workflow without hidden assumptions.',
+        'operating-risks':
+          'The biggest risks are emergency overclaiming, privacy mistakes, and stale family information.'
+      }
+    })
+  );
+  const restaurantFixture = generateProjectBundle(
+    buildAnsweredInput({
+      productName: 'Local Restaurant Ordering',
+      level: 'beginner',
+      track: 'business',
+      productIdea:
+        'A pickup-first ordering app for a local restaurant that keeps customer ordering, kitchen acknowledgment, and pickup updates simple.',
+      targetAudience: 'Restaurant staff, kitchen staff, and pickup customers.',
+      problemStatement:
+        'Phone orders and ad hoc messaging cause missed items, unclear order state, and customer confusion around pickup timing.',
+      constraints:
+        'Keep the first release focused on pickup, not delivery. Keep the workflow simple for staff and customers.',
+      mustHaveFeatures:
+        'Menu browsing, order creation, order states, kitchen acknowledgment, ready-for-pickup status, customer pickup updates.',
+      dataAndIntegrations: 'Menu items, orders, order states, kitchen queue, pickup timestamps.',
+      risks: 'Kitchen workflow confusion, pickup delays, and unclear order status could break trust quickly.',
+      successMetrics:
+        'A reviewer can understand how an order moves from creation to kitchen acknowledgment to pickup and what evidence proves failure handling.',
+      nonGoals: 'No delivery, no loyalty program, no marketplace integrations.',
+      questionnaireAnswers: {
+        'north-star': 'The release must prove that pickup ordering and kitchen handoff are clear and reviewable.',
+        'primary-workflow':
+          'A customer places a pickup order, staff confirm it, the kitchen acknowledges it, the order moves to ready state, and the customer picks it up.',
+        'scope-cut': 'Keep pickup ordering, order states, and kitchen handoff in v1. Defer delivery, rewards, and complex integrations.',
+        acceptance:
+          'A reviewer should be able to trace order states, kitchen responsibility, and pickup communication without hidden assumptions.',
+        'operating-risks': 'The main risks are missed order states, kitchen confusion, and bad pickup updates.'
+      }
+    })
+  );
+  const clinicFixture = generateProjectBundle(
+    buildAnsweredInput({
+      productName: 'Small Clinic Scheduler',
+      level: 'advanced',
+      track: 'technical',
+      productIdea:
+        'A clinic scheduling workspace that helps staff manage provider availability, patient appointments, reminder rules, and conflict handling.',
+      targetAudience: 'Clinic schedulers, providers, front-desk staff, and practice managers.',
+      problemStatement:
+        'Small clinics often manage schedules through fragmented tools, which causes double-bookings, reminder mistakes, and privacy-sensitive communication issues.',
+      constraints:
+        'Keep the first release local-first. Make provider availability, reminder wording, and privacy boundaries explicit. Avoid unsupported clinical claims.',
+      mustHaveFeatures:
+        'Provider availability, appointment requests, conflict handling, reminder planning, schedule review, privacy-safe communication boundaries.',
+      dataAndIntegrations:
+        'Providers, appointment slots, appointment requests, reminder preferences, conflict states, clinic schedule notes.',
+      risks:
+        'Reminder content may expose sensitive details, provider conflicts could be mishandled, and privacy boundaries could stay vague.',
+      successMetrics:
+        'A reviewer can understand provider conflict rules, reminder limits, and what evidence proves scheduling safety.',
+      nonGoals: 'No billing, no insurance integrations, no full EHR system.',
+      questionnaireAnswers: {
+        'north-star':
+          'The first release must make provider availability, reminder boundaries, and conflict handling explicit and reviewable.',
+        'primary-workflow':
+          'A scheduler reviews provider availability, books or adjusts appointments, resolves conflicts, and prepares reminder content with privacy limits.',
+        'data-boundaries':
+          'Important boundaries include provider calendars, appointment requests, reminder fields, conflict states, and privacy-sensitive scheduling notes.',
+        'scope-cut':
+          'Keep provider availability, conflict handling, and reminder boundaries in v1. Defer billing, insurance, and deeper patient record features.',
+        acceptance:
+          'A skeptical reviewer should be able to confirm reminder privacy rules, provider conflict handling, and explicit deferrals.',
+        'operating-risks':
+          'The biggest risks are sensitive reminder wording, provider double-booking, and hidden privacy assumptions.',
+        'deployment-guardrails':
+          'Keep the package local-first and force explicit privacy review before anything sounds production ready.',
+        'test-proof':
+          'Reviewers should capture conflict scenarios, reminder wording checks, and observed scheduling outcomes before advancement.'
+      }
+    })
+  );
+  const inventoryFixture = generateProjectBundle(
+    buildAnsweredInput({
+      productName: 'Small Business Inventory',
+      level: 'intermediate',
+      track: 'technical',
+      productIdea:
+        'An inventory planning workspace for a small business that tracks stock states, thresholds, and adjustments without adding unnecessary ERP complexity.',
+      targetAudience: 'Store managers, stock operators, and owners reviewing low-stock decisions.',
+      problemStatement:
+        'Small businesses often track inventory inconsistently, which causes stock surprises, unclear adjustments, and reactive ordering.',
+      constraints:
+        'Keep the first release simple, local-first, and focused on stock-state clarity, low-stock thresholds, and adjustment review.',
+      mustHaveFeatures:
+        'Inventory items, stock states, low-stock thresholds, adjustment notes, review workflow, purchase-plan deferrals.',
+      dataAndIntegrations:
+        'Inventory items, stock counts, threshold values, adjustment history, purchase-plan notes.',
+      risks:
+        'Low-stock thresholds may be unclear, adjustments may not be trustworthy, and the package could drift into irrelevant finance or clinic concerns.',
+      successMetrics:
+        'A reviewer can trace low-stock, adjustment, and deferred purchase planning behavior with clear evidence.',
+      nonGoals: 'No accounting suite, no POS integrations, no warehouse robotics.',
+      questionnaireAnswers: {
+        'north-star':
+          'The first release must make stock states, low-stock thresholds, and adjustments explicit enough to guide implementation.',
+        'primary-workflow':
+          'A manager reviews stock states, records adjustments, checks low-stock items, and decides what purchase planning stays deferred.',
+        'data-boundaries':
+          'Important boundaries include item records, threshold fields, adjustment history, and low-stock review notes.',
+        'scope-cut':
+          'Keep stock states, thresholds, and adjustment review in v1. Defer accounting, vendor automation, and multi-location complexity.',
+        acceptance:
+          'A reviewer should be able to trace inventory state changes and understand which purchase behaviors are deferred.',
+        'operating-risks':
+          'The biggest risks are unclear thresholds, weak adjustment trust, and over-promising unsupported inventory features.',
+        'deployment-guardrails':
+          'Keep the artifacts local-first and require explicit notes when repo targets are assumptions.',
+        'test-proof':
+          'Reviewers should capture low-stock and adjustment scenarios with observed results before advancement.'
+      }
+    })
+  );
+
+  const budgetFixture = generateProjectBundle(
+    buildAnsweredInput({
+      productName: 'Household Budget Planner',
+      level: 'beginner',
+      track: 'business',
+      productIdea:
+        'A simple household budgeting workspace that helps families track income, spending categories, and monthly review without claiming financial advice.',
+      targetAudience: 'Household budget managers, partners sharing finances, and family members reviewing spending together.',
+      problemStatement:
+        'Households lose track of spending patterns, forget irregular bills, and struggle to align on financial priorities without a shared review tool.',
+      constraints:
+        'Keep the first release local-first and focused on tracking and review, not financial advice or investment guidance.',
+      mustHaveFeatures:
+        'Income tracking, expense categories, monthly review view, shared household access, alert thresholds, non-advice disclaimers.',
+      dataAndIntegrations: 'Income entries, expense entries, category tags, monthly summary notes, alert rules.',
+      risks:
+        'The product could be mistaken for financial advice, budget data could be sensitive, and shared access could create conflict.',
+      successMetrics:
+        'A reviewer can trace income, expense categories, monthly review flow, and alert behavior with clear evidence.',
+      nonGoals: 'No investment advice, no bank integrations, no tax filing help.',
+      questionnaireAnswers: {
+        'north-star':
+          'The release must make income, expenses, categories, and monthly review explicit enough for a household to use.',
+        'primary-workflow':
+          'A budget manager enters income and expenses, reviews categories monthly, sets alert thresholds, and shares summaries with household members.',
+        'scope-cut':
+          'Keep income tracking, expense categories, monthly review, and alerts in v1. Defer bank integrations, investment features, and tax help.',
+        acceptance:
+          'A reviewer should be able to trace budget categories, alert thresholds, and monthly review behavior without hidden assumptions.',
+        'operating-risks':
+          'The main risks are financial advice overclaim, sensitive budget data exposure, and household conflict over spending.'
+      }
+    })
+  );
+  const hoaFixture = generateProjectBundle(
+    buildAnsweredInput({
+      productName: 'HOA Maintenance Portal',
+      level: 'intermediate',
+      track: 'business',
+      productIdea: 'A maintenance request portal for homeowners associations.',
+      targetAudience: 'HOA residents, board members, and vendors.',
+      problemStatement: 'Maintenance requests are lost and residents do not know status.',
+      constraints: 'Simple and local-first.',
+      mustHaveFeatures: 'Request submission, triage, vendor assignment, status updates.',
+      dataAndIntegrations: 'Requests, residents, vendors, status history.',
+      risks: 'Requests may stall without resident visibility.',
+      successMetrics: 'Residents can track request status.',
+      nonGoals: 'No payment processing.',
+      questionnaireAnswers: {
+        'north-star': 'Prove request tracking works.',
+        'primary-workflow':
+          'Resident submits request, board triages, vendor handles, resident gets updates.',
+        'scope-cut': 'Keep request tracking. Defer payments.',
+        acceptance: 'A reviewer should understand the request flow.',
+        'operating-risks': 'Request stall risk is main concern.'
+      }
+    })
+  );
+  const schoolFixture = generateProjectBundle(
+    buildAnsweredInput({
+      productName: 'School Club Portal',
+      level: 'beginner',
+      track: 'technical',
+      productIdea: 'A portal for school clubs to manage membership and events.',
+      targetAudience: 'Students, advisors, and club organizers.',
+      problemStatement: 'Club information is scattered and events are poorly communicated.',
+      constraints: 'Student-privacy first.',
+      mustHaveFeatures: 'Membership, events, announcements, permissions.',
+      dataAndIntegrations: 'Students, clubs, events, announcements.',
+      risks: 'Student privacy must be protected.',
+      successMetrics: 'Students can find club info and events.',
+      nonGoals: 'No grades integration.',
+      questionnaireAnswers: {
+        'north-star': 'Prove club info is accessible.',
+        'primary-workflow': 'Student joins club, sees events, gets announcements.',
+        'scope-cut': 'Keep membership and events. Defer grades.',
+        acceptance: 'A reviewer should see the club workflow.',
+        'operating-risks': 'Student privacy is the main risk.'
+      }
+    })
+  );
+  const volunteerFixture = generateProjectBundle(
+    buildAnsweredInput({
+      productName: 'Event Volunteer Manager',
+      level: 'beginner',
+      track: 'business',
+      productIdea: 'A volunteer coordination tool for events.',
+      targetAudience: 'Event organizers and volunteers.',
+      problemStatement: 'Volunteer shifts are hard to fill and no-shows create gaps.',
+      constraints: 'Simple check-in flow.',
+      mustHaveFeatures: 'Shift setup, volunteer signup, check-in, no-show handling.',
+      dataAndIntegrations: 'Shifts, volunteers, signups, check-ins.',
+      risks: 'No-shows and shift gaps.',
+      successMetrics: 'Organizers can fill shifts and handle no-shows.',
+      nonGoals: 'No payment to volunteers.',
+      questionnaireAnswers: {
+        'north-star': 'Prove shift coordination works.',
+        'primary-workflow': 'Organizer creates shifts, volunteers sign up, check in on day.',
+        'scope-cut': 'Keep shift coordination. Defer payments.',
+        acceptance: 'A reviewer should see the volunteer flow.',
+        'operating-risks': 'No-show risk is main concern.'
+      }
+    })
+  );
+
+  const fixtureBundles = [
+    familyFixture,
+    privvyFixture,
+    restaurantFixture,
+    clinicFixture,
+    inventoryFixture,
+    budgetFixture,
+    hoaFixture,
+    schoolFixture,
+    volunteerFixture
+  ];
+  const normalizedPhaseTokens = (bundleToInspect: ReturnType<typeof generateProjectBundle>) =>
+    new Set(
+      bundleToInspect.phases
+        .flatMap((phase) =>
+          phase.name
+            .toLowerCase()
+            .replace(/[^a-z0-9\s]/g, ' ')
+            .split(/\s+/)
+            .filter((token) => token.length >= 5)
+        )
+    );
+  const overlapRatio = (left: ReturnType<typeof generateProjectBundle>, right: ReturnType<typeof generateProjectBundle>) => {
+    const leftTokens = normalizedPhaseTokens(left);
+    const rightTokens = normalizedPhaseTokens(right);
+    const intersection = Array.from(leftTokens).filter((token) => rightTokens.has(token)).length;
+    const union = new Set([...Array.from(leftTokens), ...Array.from(rightTokens)]).size || 1;
+    return intersection / union;
+  };
+
+  for (const fixture of fixtureBundles) {
+    assert(
+      fixture.phases.every((phase) => !/checkpoint\s+[01]/i.test(phase.name)),
+      `${fixture.files.find((file) => file.path === 'PROJECT_BRIEF.md')?.content || 'bundle'} should not generate synthetic checkpoint phase names.`
+    );
+    assert(
+      fixture.phases.every((phase) => !/package review checkpoint/i.test(phase.name)),
+      'No phase should use synthetic package review checkpoint padding.'
+    );
+    const firstPrompt = getFile(fixture, `phases/${fixture.phases[0].slug}/CODEX_BUILD_PROMPT.md`);
+    assert(
+      !/List the exact repo files you plan to change before editing anything\./i.test(firstPrompt) ||
+        /If exact targets are unknown, propose likely areas and label them as assumptions\./i.test(firstPrompt),
+      'Planning-phase prompts should not demand invented implementation files.'
+    );
+    const finalPhase = fixture.phases[fixture.phases.length - 1];
+    const finalPrompt = getFile(fixture, `phases/${finalPhase.slug}/CODEX_BUILD_PROMPT.md`);
+    const finalNextContext = getFile(fixture, `phases/${finalPhase.slug}/NEXT_PHASE_CONTEXT.md`);
+    assert(!/No next phase\. This is the final phase\./i.test(finalNextContext), 'Final NEXT_PHASE_CONTEXT should be a recap, not generic next-phase filler.');
+    assert(/## Final package summary|## Final release caveats/i.test(finalNextContext), 'Final NEXT_PHASE_CONTEXT should include a final recap or caveats.');
+    assert(!/package review checkpoint/i.test(getFile(fixture, 'PHASE_PLAN.md')), 'PHASE_PLAN.md should not include synthetic checkpoint padding.');
+
+    for (const phase of fixture.phases) {
+      const exitGateText = getFile(fixture, `phases/${phase.slug}/EXIT_GATE.md`);
+      const testPlanText = getFile(fixture, `phases/${phase.slug}/TEST_PLAN.md`);
+      const handoffText = getFile(fixture, `phases/${phase.slug}/HANDOFF_SUMMARY.md`);
+      assert(/## Concrete expected outputs/.test(exitGateText), `Exit gate should include concrete expected outputs for ${phase.slug}.`);
+      assert(/## Failure or blocker conditions/.test(exitGateText), `Exit gate should include failure conditions for ${phase.slug}.`);
+      assert(/## Scope guard/.test(exitGateText), `Exit gate should include scope guard rules for ${phase.slug}.`);
+      assert(/## Scenario 1/.test(testPlanText), `TEST_PLAN.md should include a scenario for ${phase.slug}.`);
+      assert(/## Expected result/.test(testPlanText), `TEST_PLAN.md should include expected result for ${phase.slug}.`);
+      assert(/## Failure condition/.test(testPlanText), `TEST_PLAN.md should include failure condition for ${phase.slug}.`);
+      assert(/## Evidence to capture/.test(testPlanText), `TEST_PLAN.md should include evidence to capture for ${phase.slug}.`);
+      assert(!/Use the current acceptance anchor as proof guidance/i.test(testPlanText), `TEST_PLAN.md should not contain truncated generic anchor text for ${phase.slug}.`);
+      assert(!/Verify that the phase output still matches/i.test(testPlanText), `TEST_PLAN.md should not contain generic workflow filler for ${phase.slug}.`);
+      assert(!/Re-check the highest risk focus/i.test(testPlanText), `TEST_PLAN.md should not contain generic risk filler for ${phase.slug}.`);
+      assert(/## Completion update/.test(handoffText), `HANDOFF_SUMMARY.md should be pre-populated with a completion update section for ${phase.slug}.`);
+      assert(/## Expected outputs from this phase/.test(handoffText), `HANDOFF_SUMMARY.md should include expected outputs for ${phase.slug}.`);
+    }
+  }
+
+  assert(
+    overlapRatio(familyFixture, restaurantFixture) < 0.7 &&
+      overlapRatio(privvyFixture, clinicFixture) < 0.7 &&
+      overlapRatio(restaurantFixture, inventoryFixture) < 0.7,
+    'Phase plans across contrasting domains are still too similar.'
+  );
+  assert(
+    /child visibility|parent control/i.test(getFile(familyFixture, 'PHASE_PLAN.md')),
+    'Family task domain should generate child-visibility-specific phases.'
+  );
+  assert(
+    /emergency|legal boundary/i.test(getFile(privvyFixture, 'PHASE_PLAN.md')),
+    'Family readiness domain should generate emergency or legal boundary phases.'
+  );
+  assert(
+    /order states|kitchen handoff|pickup/i.test(getFile(restaurantFixture, 'PHASE_PLAN.md')),
+    'Restaurant ordering domain should generate order-state or kitchen workflow phases.'
+  );
+  assert(
+    /provider availability|reminder|privacy/i.test(getFile(clinicFixture, 'PHASE_PLAN.md')),
+    'Clinic scheduler domain should generate provider, reminder, or privacy phases.'
+  );
+  assert(
+    /stock states|thresholds|adjustment/i.test(getFile(inventoryFixture, 'PHASE_PLAN.md')),
+    'Inventory domain should generate stock-state-specific phases.'
+  );
+  assert(
+    /child users only see allowed items|parent or admin control boundaries/i.test(getFile(familyFixture, 'phases/phase-01/EVIDENCE_CHECKLIST.md')) ||
+      /child users only see allowed items|parent or admin control boundaries/i.test(
+        fixtureBundles.flatMap((fixture) => fixture.files.map((file) => file.content)).join('\n')
+      ),
+    'Sensitive child-domain inputs should generate risk-specific evidence requirements.'
+  );
+  assert(
+    /avoid sensitive clinic details|provider scheduling conflicts/i.test(fixtureBundles.flatMap((fixture) => fixture.files.map((file) => file.content)).join('\n')),
+    'Sensitive clinic-domain inputs should generate risk-specific checks.'
+  );
+  assert(
+    /budget categories|income|expense|monthly review/i.test(getFile(budgetFixture, 'PHASE_PLAN.md')),
+    'Budget planner domain should generate budget-specific phases.'
+  );
+  assert(
+    /request triage|vendor|resident|status update/i.test(getFile(hoaFixture, 'PHASE_PLAN.md')),
+    'HOA maintenance domain should generate HOA-specific phases.'
+  );
+  assert(
+    /student role|event sign-up|membership|permission/i.test(getFile(schoolFixture, 'PHASE_PLAN.md')),
+    'School club domain should generate school-club-specific phases.'
+  );
+  assert(
+    /shift coverage|no-show|check-in|volunteer/i.test(getFile(volunteerFixture, 'PHASE_PLAN.md')),
+    'Event volunteer domain should generate volunteer-specific phases.'
+  );
+  assert(
+    !/legal advice|emergency authority/i.test(getFile(inventoryFixture, 'PHASE_PLAN.md')),
+    'Non-sensitive inventory input should not inherit irrelevant legal or emergency phases.'
+  );
+
+  // Regression: non-SDR packages must not contain SDR-specific language
+  const nonSdrFixtures = [
+    { name: 'Restaurant', fixture: restaurantFixture },
+    { name: 'Budget', fixture: budgetFixture },
+    { name: 'Clinic', fixture: clinicFixture },
+    { name: 'HOA', fixture: hoaFixture },
+    { name: 'School', fixture: schoolFixture },
+    { name: 'Volunteer', fixture: volunteerFixture },
+    { name: 'Inventory', fixture: inventoryFixture }
+  ];
+  for (const { name, fixture } of nonSdrFixtures) {
+    const allContent = fixture.files.map((file) => file.content).join('\n');
+    assert(
+      !/sales qualification brief/i.test(allContent),
+      `${name} package should not contain sales qualification brief.`
+    );
+    assert(
+      !/rep handoff/i.test(allContent),
+      `${name} package should not contain rep handoff language.`
+    );
+    assert(
+      !/blocked-lead review/i.test(allContent),
+      `${name} package should not contain blocked-lead review language.`
+    );
+  }
+
+  // Regression: budget must not contain clinical leakage
+  const budgetContent = budgetFixture.files.map((file) => file.content).join('\n');
+  assert(!/clinical details/i.test(budgetContent), 'Budget planner should not contain clinical details.');
+  assert(!/provider availability/i.test(budgetContent), 'Budget planner should not contain provider availability language.');
+  assert(!/reminder privacy/i.test(budgetContent), 'Budget planner should not contain reminder privacy language.');
+
+  // Regression: no truncated acceptance anchors
+  for (const fixture of fixtureBundles) {
+    const allContent = fixture.files.map((file) => file.content).join('\n');
+    assert(
+      !/know the\.\.\./i.test(allContent),
+      'Generated files should not contain truncated acceptance anchors ending in know the....'
+    );
+    assert(
+      !/minimum event and\.\.\./i.test(allContent),
+      'Generated files should not contain truncated acceptance anchors ending in minimum event and....'
+    );
+    // No sentence should end with "..." (ellipsis at end of line after text)
+    const lines = allContent.split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.endsWith('...') && trimmed.length > 3 && !trimmed.startsWith('-') && !trimmed.startsWith('*')) {
+        assert(false, `Generated file contains truncated text ending in "...": ${trimmed.substring(0, 80)}`);
+      }
+    }
+  }
 
   const verboseGeneric = buildAnsweredInput({
     productName: 'Generic Plan',
@@ -554,6 +1260,10 @@ async function main() {
     );
   }
 
+  function replaceReportSection(content: string, heading: string, body: string) {
+    return content.replace(new RegExp(`## ${heading}[\\s\\S]*?(?=\\n##\\s+|$)`, 'i'), `## ${heading}\n${body}\n`);
+  }
+
   // Test: next-phase with blocked evidence should fail
   const blockedReportPath = path.join(testPkgDir, 'phases', 'phase-01', 'VERIFICATION_REPORT.md');
   const blockedReport = updateReport(fs.readFileSync(blockedReportPath, 'utf8'), 'fail', 'blocked');
@@ -624,6 +1334,102 @@ async function main() {
       `next-phase error message should mention inconsistency, got: ${(e as Error).message}`
     );
   }
+
+  // Test: next-phase rejects generic fake evidence even when the report says pass + proceed
+  const genericEvidencePkg = fs.mkdtempSync(path.join(os.tmpdir(), 'xelera-smoke-'));
+  const genericEvidenceResult = await createArtifactPackage({ input: sample, outDir: genericEvidencePkg, zip: false });
+  const genericEvidenceStatePath = path.join(genericEvidenceResult.rootDir, 'repo', 'xelera-state.json');
+  const genericEvidenceState = JSON.parse(fs.readFileSync(genericEvidenceStatePath, 'utf8'));
+  genericEvidenceState.blockedPhases = [];
+  fs.writeFileSync(genericEvidenceStatePath, JSON.stringify(genericEvidenceState, null, 2));
+  const genericEvidenceFile = path.join(genericEvidenceResult.rootDir, 'notes', 'generic-evidence.md');
+  fs.mkdirSync(path.dirname(genericEvidenceFile), { recursive: true });
+  fs.writeFileSync(genericEvidenceFile, 'I reviewed the work and it looks good. No issues. Ready to proceed.\n', 'utf8');
+  const genericEvidenceReportPath = path.join(genericEvidenceResult.rootDir, 'phases', 'phase-01', 'VERIFICATION_REPORT.md');
+  let genericEvidenceReport = updateReport(fs.readFileSync(genericEvidenceReportPath, 'utf8'), 'pass', 'proceed');
+  genericEvidenceReport = replaceEvidenceSection(genericEvidenceReport, ['- notes/generic-evidence.md']);
+  fs.writeFileSync(genericEvidenceReportPath, genericEvidenceReport);
+  try {
+    process.argv = ['node', 'xelera-next-phase.ts', `--package=${genericEvidenceResult.rootDir}`, '--evidence=phases/phase-01/VERIFICATION_REPORT.md'];
+    runNextPhase();
+    assert(false, 'next-phase should reject generic fake evidence');
+  } catch (e) {
+    assert(/generic|concrete proof/i.test((e as Error).message), `next-phase should explain generic evidence rejection, got: ${(e as Error).message}`);
+  }
+
+  // Test: next-phase rejects pass/proceed headers when the report body still says the phase is blocked
+  const contradictionPkg = fs.mkdtempSync(path.join(os.tmpdir(), 'xelera-smoke-'));
+  const contradictionResult = await createArtifactPackage({ input: sample, outDir: contradictionPkg, zip: false });
+  const contradictionStatePath = path.join(contradictionResult.rootDir, 'repo', 'xelera-state.json');
+  const contradictionState = JSON.parse(fs.readFileSync(contradictionStatePath, 'utf8'));
+  contradictionState.blockedPhases = [];
+  fs.writeFileSync(contradictionStatePath, JSON.stringify(contradictionState, null, 2));
+  const contradictionEvidenceFile = path.join(contradictionResult.rootDir, 'notes', 'scenario-proof.md');
+  fs.mkdirSync(path.dirname(contradictionEvidenceFile), { recursive: true });
+  fs.writeFileSync(
+    contradictionEvidenceFile,
+    'Scenario checked: reviewed the task assignment flow and parent approval boundary.\nObserved result: the phase notes name the role boundary and the blocker list stayed empty.\nDecision made: keep reminder delivery deferred to a later phase.\n',
+    'utf8'
+  );
+  const contradictionReportPath = path.join(contradictionResult.rootDir, 'phases', 'phase-01', 'VERIFICATION_REPORT.md');
+  let contradictionReport = updateReport(fs.readFileSync(contradictionReportPath, 'utf8'), 'pass', 'proceed');
+  contradictionReport = replaceEvidenceSection(contradictionReport, ['- notes/scenario-proof.md']);
+  contradictionReport = replaceReportSection(contradictionReport, 'summary', '- The package is blocked until the role rules are clarified.');
+  contradictionReport = replaceReportSection(contradictionReport, 'final decision', 'Do not advance. The phase is not ready.');
+  fs.writeFileSync(contradictionReportPath, contradictionReport);
+  try {
+    process.argv = ['node', 'xelera-next-phase.ts', `--package=${contradictionResult.rootDir}`, '--evidence=phases/phase-01/VERIFICATION_REPORT.md'];
+    runNextPhase();
+    assert(false, 'next-phase should reject header/body contradictions');
+  } catch (e) {
+    assert(/headers say pass\/proceed/i.test((e as Error).message), `next-phase should explain header/body contradictions, got: ${(e as Error).message}`);
+  }
+
+  // Test: next-phase accepts meaningful evidence with command output
+  const commandEvidencePkg = fs.mkdtempSync(path.join(os.tmpdir(), 'xelera-smoke-'));
+  const commandEvidenceResult = await createArtifactPackage({ input: sample, outDir: commandEvidencePkg, zip: false });
+  const commandEvidenceStatePath = path.join(commandEvidenceResult.rootDir, 'repo', 'xelera-state.json');
+  const commandEvidenceState = JSON.parse(fs.readFileSync(commandEvidenceStatePath, 'utf8'));
+  commandEvidenceState.blockedPhases = [];
+  fs.writeFileSync(commandEvidenceStatePath, JSON.stringify(commandEvidenceState, null, 2));
+  const commandEvidenceFile = path.join(commandEvidenceResult.rootDir, 'notes', 'command-proof.md');
+  fs.mkdirSync(path.dirname(commandEvidenceFile), { recursive: true });
+  fs.writeFileSync(
+    commandEvidenceFile,
+    'Command run: `npm run typecheck`\nObserved result: PASS, no TypeScript errors in lib/generator.ts or scripts/xelera-package-utils.ts.\nChanged files: lib/generator.ts, scripts/xelera-package-utils.ts.\nDecision made: keep implementation-file assumptions out of planning phases.\n',
+    'utf8'
+  );
+  const commandEvidenceReportPath = path.join(commandEvidenceResult.rootDir, 'phases', 'phase-01', 'VERIFICATION_REPORT.md');
+  let commandEvidenceReport = updateReport(fs.readFileSync(commandEvidenceReportPath, 'utf8'), 'pass', 'proceed');
+  commandEvidenceReport = replaceEvidenceSection(commandEvidenceReport, ['- notes/command-proof.md']);
+  fs.writeFileSync(commandEvidenceReportPath, commandEvidenceReport);
+  process.argv = ['node', 'xelera-next-phase.ts', `--package=${commandEvidenceResult.rootDir}`, '--evidence=phases/phase-01/VERIFICATION_REPORT.md'];
+  runNextPhase();
+  const commandEvidenceAdvancedState = JSON.parse(fs.readFileSync(path.join(commandEvidenceResult.rootDir, 'repo', 'xelera-state.json'), 'utf8'));
+  assert(commandEvidenceAdvancedState.currentPhase === 2, 'next-phase should accept meaningful evidence with command output.');
+
+  // Test: next-phase accepts meaningful evidence with a concrete scenario and observed result
+  const scenarioEvidencePkg = fs.mkdtempSync(path.join(os.tmpdir(), 'xelera-smoke-'));
+  const scenarioEvidenceResult = await createArtifactPackage({ input: familySample, outDir: scenarioEvidencePkg, zip: false });
+  const scenarioEvidenceStatePath = path.join(scenarioEvidenceResult.rootDir, 'repo', 'xelera-state.json');
+  const scenarioEvidenceState = JSON.parse(fs.readFileSync(scenarioEvidenceStatePath, 'utf8'));
+  scenarioEvidenceState.blockedPhases = [];
+  fs.writeFileSync(scenarioEvidenceStatePath, JSON.stringify(scenarioEvidenceState, null, 2));
+  const scenarioEvidenceFile = path.join(scenarioEvidenceResult.rootDir, 'notes', 'scenario-proof.md');
+  fs.mkdirSync(path.dirname(scenarioEvidenceFile), { recursive: true });
+  fs.writeFileSync(
+    scenarioEvidenceFile,
+    'Scenario checked: kid dashboard task visibility after parent assignment.\nObserved result: the phase packet says child users only see assigned or shared tasks, and parent approval remains explicit.\nArtifact reviewed: phases/phase-01/PHASE_BRIEF.md.\nBlocker found: none.\n',
+    'utf8'
+  );
+  const scenarioEvidenceReportPath = path.join(scenarioEvidenceResult.rootDir, 'phases', 'phase-01', 'VERIFICATION_REPORT.md');
+  let scenarioEvidenceReport = updateReport(fs.readFileSync(scenarioEvidenceReportPath, 'utf8'), 'pass', 'proceed');
+  scenarioEvidenceReport = replaceEvidenceSection(scenarioEvidenceReport, ['- notes/scenario-proof.md']);
+  fs.writeFileSync(scenarioEvidenceReportPath, scenarioEvidenceReport);
+  process.argv = ['node', 'xelera-next-phase.ts', `--package=${scenarioEvidenceResult.rootDir}`, '--evidence=phases/phase-01/VERIFICATION_REPORT.md'];
+  runNextPhase();
+  const scenarioEvidenceAdvancedState = JSON.parse(fs.readFileSync(path.join(scenarioEvidenceResult.rootDir, 'repo', 'xelera-state.json'), 'utf8'));
+  assert(scenarioEvidenceAdvancedState.currentPhase === 2, 'next-phase should accept meaningful scenario evidence.');
 
   // Test: next-phase with proceed evidence should succeed
   const proceedReport = updateReport(fs.readFileSync(blockedReportPath, 'utf8'), 'pass', 'proceed');
@@ -788,6 +1594,194 @@ async function main() {
       assert(false, 'validate should reject evidence files that contain only comments or template text');
     } catch (e) {
       assert((e as Error).message === 'process.exit:1', 'validate should exit with code 1 for comment-only evidence files');
+    }
+
+    // Test: validate rejects generic fake evidence
+    const genericValidatePkg = fs.mkdtempSync(path.join(os.tmpdir(), 'xelera-smoke-'));
+    const genericValidateResult = await createArtifactPackage({ input: sample, outDir: genericValidatePkg, zip: false });
+    const genericValidateEvidencePath = path.join(genericValidateResult.rootDir, 'notes', 'generic-evidence.md');
+    fs.mkdirSync(path.dirname(genericValidateEvidencePath), { recursive: true });
+    fs.writeFileSync(genericValidateEvidencePath, 'I reviewed the work and it looks good. No issues. Ready to proceed.\n', 'utf8');
+    const genericValidateReportPath = path.join(genericValidateResult.rootDir, 'phases', 'phase-01', 'VERIFICATION_REPORT.md');
+    let genericValidateReport = updateReport(fs.readFileSync(genericValidateReportPath, 'utf8'), 'pass', 'proceed');
+    genericValidateReport = replaceEvidenceSection(genericValidateReport, ['- notes/generic-evidence.md']);
+    fs.writeFileSync(genericValidateReportPath, genericValidateReport);
+    process.argv = ['node', 'xelera-validate.ts', `--package=${genericValidateResult.rootDir}`];
+    try {
+      runValidate();
+      assert(false, 'validate should reject generic fake evidence');
+    } catch (e) {
+      assert((e as Error).message === 'process.exit:1', 'validate should exit with code 1 for generic fake evidence');
+    }
+
+    // Test: validate rejects pass/proceed headers when the body still says blocked
+    const contradictionValidatePkg = fs.mkdtempSync(path.join(os.tmpdir(), 'xelera-smoke-'));
+    const contradictionValidateResult = await createArtifactPackage({ input: sample, outDir: contradictionValidatePkg, zip: false });
+    const contradictionValidateEvidencePath = path.join(contradictionValidateResult.rootDir, 'notes', 'scenario-proof.md');
+    fs.mkdirSync(path.dirname(contradictionValidateEvidencePath), { recursive: true });
+    fs.writeFileSync(
+      contradictionValidateEvidencePath,
+      'Scenario checked: reviewed the planning workflow and the scope cut.\nObserved result: the phase brief names the current v1 scope and the blocking warning list stayed empty.\nDecision made: keep integrations deferred.\n',
+      'utf8'
+    );
+    const contradictionValidateReportPath = path.join(contradictionValidateResult.rootDir, 'phases', 'phase-01', 'VERIFICATION_REPORT.md');
+    let contradictionValidateReport = updateReport(fs.readFileSync(contradictionValidateReportPath, 'utf8'), 'pass', 'proceed');
+    contradictionValidateReport = replaceEvidenceSection(contradictionValidateReport, ['- notes/scenario-proof.md']);
+    contradictionValidateReport = replaceReportSection(contradictionValidateReport, 'summary', '- The phase is blocked because the scope is not ready.');
+    contradictionValidateReport = replaceReportSection(contradictionValidateReport, 'final decision', 'Do not advance. The package is not ready.');
+    fs.writeFileSync(contradictionValidateReportPath, contradictionValidateReport);
+    process.argv = ['node', 'xelera-validate.ts', `--package=${contradictionValidateResult.rootDir}`];
+    try {
+      runValidate();
+      assert(false, 'validate should reject header/body contradictions');
+    } catch (e) {
+      assert((e as Error).message === 'process.exit:1', 'validate should exit with code 1 for report contradictions');
+    }
+
+    // Test: validate accepts meaningful evidence with command output
+    const commandValidatePkg = fs.mkdtempSync(path.join(os.tmpdir(), 'xelera-smoke-'));
+    const commandValidateResult = await createArtifactPackage({ input: sample, outDir: commandValidatePkg, zip: false });
+    const commandValidateEvidencePath = path.join(commandValidateResult.rootDir, 'notes', 'command-proof.md');
+    fs.mkdirSync(path.dirname(commandValidateEvidencePath), { recursive: true });
+    fs.writeFileSync(
+      commandValidateEvidencePath,
+      'Command run: `npm run smoke`\nObserved result: PASS, the package validated and the lifecycle remained Blocked until blocker warnings are resolved.\nChanged files reviewed: repo/manifest.json and phases/phase-01/PHASE_BRIEF.md.\nDecision made: keep approval metadata pending until review.\n',
+      'utf8'
+    );
+    const commandValidateReportPath = path.join(commandValidateResult.rootDir, 'phases', 'phase-01', 'VERIFICATION_REPORT.md');
+    let commandValidateReport = updateReport(fs.readFileSync(commandValidateReportPath, 'utf8'), 'pass', 'proceed');
+    commandValidateReport = replaceEvidenceSection(commandValidateReport, ['- notes/command-proof.md']);
+    fs.writeFileSync(commandValidateReportPath, commandValidateReport);
+    const commandValidateResultsPath = path.join(commandValidateResult.rootDir, 'phases', 'phase-01', 'TEST_RESULTS.md');
+    fs.writeFileSync(
+      commandValidateResultsPath,
+      fs.readFileSync(commandValidateResultsPath, 'utf8')
+        .replace(/## Final result: pending/, '## Final result: pass')
+        .replace(/## Commands run\n-/, '## Commands run\n- npm run smoke')
+        .replace(/## Notes\n-/, '## Notes\n- Smoke test passed with no TypeScript errors.')
+    );
+    process.argv = ['node', 'xelera-validate.ts', `--package=${commandValidateResult.rootDir}`];
+    runValidate();
+
+    // Test: validate accepts meaningful evidence with a concrete scenario and observed result
+    const scenarioValidatePkg = fs.mkdtempSync(path.join(os.tmpdir(), 'xelera-smoke-'));
+    const scenarioValidateResult = await createArtifactPackage({ input: familySample, outDir: scenarioValidatePkg, zip: false });
+    const scenarioValidateEvidencePath = path.join(scenarioValidateResult.rootDir, 'notes', 'scenario-proof.md');
+    fs.mkdirSync(path.dirname(scenarioValidateEvidencePath), { recursive: true });
+    fs.writeFileSync(
+      scenarioValidateEvidencePath,
+      'Scenario checked: parent assigns a task and verifies what the kid dashboard can see.\nObserved result: the package states that child users only see assigned or shared tasks, and parent approval still controls completion review.\nArtifact reviewed: phases/phase-01/PHASE_BRIEF.md.\nDecision made: reminder email delivery remains deferred.\n',
+      'utf8'
+    );
+    const scenarioValidateReportPath = path.join(scenarioValidateResult.rootDir, 'phases', 'phase-01', 'VERIFICATION_REPORT.md');
+    let scenarioValidateReport = updateReport(fs.readFileSync(scenarioValidateReportPath, 'utf8'), 'pass', 'proceed');
+    scenarioValidateReport = replaceEvidenceSection(scenarioValidateReport, ['- notes/scenario-proof.md']);
+    fs.writeFileSync(scenarioValidateReportPath, scenarioValidateReport);
+    const scenarioValidateResultsPath = path.join(scenarioValidateResult.rootDir, 'phases', 'phase-01', 'TEST_RESULTS.md');
+    fs.writeFileSync(
+      scenarioValidateResultsPath,
+      fs.readFileSync(scenarioValidateResultsPath, 'utf8')
+        .replace(/## Final result: pending/, '## Final result: pass')
+        .replace(/## Manual checks completed\n-/, '## Manual checks completed\n- Verified child-visible task rules in PHASE_BRIEF.md')
+        .replace(/## Notes\n-/, '## Notes\n- Parent approval boundary is explicit and kid dashboard scope is correct.')
+    );
+    process.argv = ['node', 'xelera-validate.ts', `--package=${scenarioValidateResult.rootDir}`];
+    runValidate();
+
+    // Test: validate rejects missing root testing files
+    const missingTestingFilesPkg = fs.mkdtempSync(path.join(os.tmpdir(), 'xelera-smoke-'));
+    const cliResultMissingTesting = await createArtifactPackage({ input: sample, outDir: missingTestingFilesPkg, zip: false });
+    fs.unlinkSync(path.join(cliResultMissingTesting.rootDir, 'TESTING_STRATEGY.md'));
+    process.argv = ['node', 'xelera-validate.ts', `--package=${cliResultMissingTesting.rootDir}`];
+    try {
+      runValidate();
+      assert(false, 'validate should reject missing root testing files');
+    } catch (e) {
+      assert((e as Error).message === 'process.exit:1', 'validate should exit with code 1 for missing root testing files');
+    }
+
+    // Test: validate rejects missing phase TEST_SCRIPT.md
+    const missingTestScriptPkg = fs.mkdtempSync(path.join(os.tmpdir(), 'xelera-smoke-'));
+    const cliResultMissingScript = await createArtifactPackage({ input: sample, outDir: missingTestScriptPkg, zip: false });
+    fs.unlinkSync(path.join(cliResultMissingScript.rootDir, 'phases', 'phase-01', 'TEST_SCRIPT.md'));
+    process.argv = ['node', 'xelera-validate.ts', `--package=${cliResultMissingScript.rootDir}`];
+    try {
+      runValidate();
+      assert(false, 'validate should reject missing phase TEST_SCRIPT.md');
+    } catch (e) {
+      assert((e as Error).message === 'process.exit:1', 'validate should exit with code 1 for missing TEST_SCRIPT.md');
+    }
+
+    // Test: validate rejects missing phase TEST_RESULTS.md
+    const missingTestResultsPkg = fs.mkdtempSync(path.join(os.tmpdir(), 'xelera-smoke-'));
+    const cliResultMissingResults = await createArtifactPackage({ input: sample, outDir: missingTestResultsPkg, zip: false });
+    fs.unlinkSync(path.join(cliResultMissingResults.rootDir, 'phases', 'phase-01', 'TEST_RESULTS.md'));
+    process.argv = ['node', 'xelera-validate.ts', `--package=${cliResultMissingResults.rootDir}`];
+    try {
+      runValidate();
+      assert(false, 'validate should reject missing phase TEST_RESULTS.md');
+    } catch (e) {
+      assert((e as Error).message === 'process.exit:1', 'validate should exit with code 1 for missing TEST_RESULTS.md');
+    }
+
+    // Test: validate rejects TEST_RESULTS.md defaulting to pass
+    const defaultPassResultsPkg = fs.mkdtempSync(path.join(os.tmpdir(), 'xelera-smoke-'));
+    const cliResultDefaultPass = await createArtifactPackage({ input: sample, outDir: defaultPassResultsPkg, zip: false });
+    const defaultPassResultsPath = path.join(cliResultDefaultPass.rootDir, 'phases', 'phase-01', 'TEST_RESULTS.md');
+    let defaultPassResults = fs.readFileSync(defaultPassResultsPath, 'utf8');
+    defaultPassResults = defaultPassResults.replace(/## Final result: pending/, '## Final result: pass');
+    fs.writeFileSync(defaultPassResultsPath, defaultPassResults);
+    process.argv = ['node', 'xelera-validate.ts', `--package=${cliResultDefaultPass.rootDir}`];
+    try {
+      runValidate();
+      assert(false, 'validate should reject TEST_RESULTS.md defaulting to pass');
+    } catch (e) {
+      assert((e as Error).message === 'process.exit:1', 'validate should exit with code 1 for TEST_RESULTS.md defaulting to pass');
+    }
+
+    // Test: validate rejects generic fake test evidence in TEST_RESULTS.md
+    const genericTestResultsPkg = fs.mkdtempSync(path.join(os.tmpdir(), 'xelera-smoke-'));
+    const cliResultGenericResults = await createArtifactPackage({ input: sample, outDir: genericTestResultsPkg, zip: false });
+    const genericTestResultsPath = path.join(cliResultGenericResults.rootDir, 'phases', 'phase-01', 'TEST_RESULTS.md');
+    let genericTestResults = fs.readFileSync(genericTestResultsPath, 'utf8');
+    genericTestResults = genericTestResults.replace(/## Notes\n-/, '## Notes\n- Looks good. No issues found.');
+    fs.writeFileSync(genericTestResultsPath, genericTestResults);
+    process.argv = ['node', 'xelera-validate.ts', `--package=${cliResultGenericResults.rootDir}`];
+    try {
+      runValidate();
+      assert(false, 'validate should reject generic fake test evidence');
+    } catch (e) {
+      assert((e as Error).message === 'process.exit:1', 'validate should exit with code 1 for generic fake test evidence');
+    }
+
+    // Test: validate rejects verification pass while TEST_RESULTS.md is pending
+    const verifyPassTestsPendingPkg = fs.mkdtempSync(path.join(os.tmpdir(), 'xelera-smoke-'));
+    const cliResultVerifyPassTestsPending = await createArtifactPackage({ input: sample, outDir: verifyPassTestsPendingPkg, zip: false });
+    const verifyPassTestsPendingReportPath = path.join(cliResultVerifyPassTestsPending.rootDir, 'phases', 'phase-01', 'VERIFICATION_REPORT.md');
+    let verifyPassTestsPendingReport = updateReport(fs.readFileSync(verifyPassTestsPendingReportPath, 'utf8'), 'pass', 'proceed');
+    verifyPassTestsPendingReport = verifyPassTestsPendingReport.replace(/- pending/, '- repo/manifest.json');
+    fs.writeFileSync(verifyPassTestsPendingReportPath, verifyPassTestsPendingReport);
+    process.argv = ['node', 'xelera-validate.ts', `--package=${cliResultVerifyPassTestsPending.rootDir}`];
+    try {
+      runValidate();
+      assert(false, 'validate should reject verification pass while TEST_RESULTS.md is pending');
+    } catch (e) {
+      assert((e as Error).message === 'process.exit:1', 'validate should exit with code 1 when verification pass conflicts with pending test results');
+    }
+
+    // Test: validate rejects regression results defaulting to pass
+    const regressionDefaultPassPkg = fs.mkdtempSync(path.join(os.tmpdir(), 'xelera-smoke-'));
+    const cliResultRegressionDefaultPass = await createArtifactPackage({ input: sample, outDir: regressionDefaultPassPkg, zip: false });
+    const regressionDefaultPassPath = path.join(cliResultRegressionDefaultPass.rootDir, 'regression-suite', 'REGRESSION_RESULTS_TEMPLATE.md');
+    let regressionDefaultPassContent = fs.readFileSync(regressionDefaultPassPath, 'utf8');
+    regressionDefaultPassContent = regressionDefaultPassContent.replace(/## Overall result: pending/, '## Overall result: pass');
+    fs.writeFileSync(regressionDefaultPassPath, regressionDefaultPassContent);
+    process.argv = ['node', 'xelera-validate.ts', `--package=${cliResultRegressionDefaultPass.rootDir}`];
+    try {
+      runValidate();
+      assert(false, 'validate should reject regression results defaulting to pass');
+    } catch (e) {
+      assert((e as Error).message === 'process.exit:1', 'validate should exit with code 1 for regression results defaulting to pass');
     }
 
     // Test: validate catches malformed state

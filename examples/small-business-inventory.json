@@ -1,0 +1,28 @@
+{
+  "productName": "Small Business Inventory",
+  "level": "intermediate",
+  "track": "technical",
+  "productIdea": "An inventory planning workspace for a small business that tracks stock states, thresholds, and adjustments without adding unnecessary ERP complexity.",
+  "targetAudience": "Store managers, stock operators, and owners reviewing low-stock decisions.",
+  "problemStatement": "Small businesses often track inventory inconsistently, which causes stock surprises, unclear adjustments, and reactive ordering.",
+  "constraints": "Keep the first release simple, local-first, and focused on stock-state clarity, low-stock thresholds, and adjustment review.",
+  "desiredOutput": "A build-ready markdown workspace with phased planning, stock state definitions, threshold rules, gates, verification files, handoff context, and enough clarity for an inventory tracking tool.",
+  "mustHaveFeatures": "Inventory items, stock states, low-stock thresholds, adjustment notes, review workflow, purchase-plan deferrals.",
+  "niceToHaveFeatures": "Supplier tracking, purchase order generation, barcode scanning, multi-location support.",
+  "dataAndIntegrations": "Inventory items, stock counts, threshold values, adjustment history, purchase-plan notes.",
+  "risks": "Low-stock thresholds may be unclear, adjustments may not be trustworthy, and the package could drift into irrelevant finance or clinic concerns.",
+  "successMetrics": "A reviewer can trace low-stock, adjustment, and deferred purchase planning behavior with clear evidence.",
+  "nonGoals": "No accounting suite, no POS integrations, no warehouse robotics.",
+  "timeline": "Plan a realistic first release that proves the inventory workflow works before adding richer features.",
+  "teamContext": "A store manager uses Xelera Method to prepare the inventory plan and then hands the workspace to Codex, Claude Code, OpenCode, or a development team for phased implementation.",
+  "questionnaireAnswers": {
+    "north-star": "The first release must make stock states, low-stock thresholds, and adjustments explicit enough to guide implementation.",
+    "primary-workflow": "A manager reviews stock states, records adjustments, checks low-stock items, and decides what purchase planning stays deferred.",
+    "data-boundaries": "Important boundaries include item records, threshold fields, adjustment history, and low-stock review notes.",
+    "scope-cut": "Keep stock states, thresholds, and adjustment review in v1. Defer accounting, vendor automation, and multi-location complexity.",
+    "acceptance": "A reviewer should be able to trace inventory state changes and understand which purchase behaviors are deferred.",
+    "operating-risks": "The biggest risks are unclear thresholds, weak adjustment trust, and over-promising unsupported inventory features.",
+    "deployment-guardrails": "Keep the artifacts local-first and require explicit notes when repo targets are assumptions.",
+    "test-proof": "Reviewers should capture low-stock and adjustment scenarios with observed results before advancement."
+  }
+}

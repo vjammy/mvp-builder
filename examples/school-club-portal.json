@@ -1,0 +1,27 @@
+{
+  "productName": "School Club Portal",
+  "level": "beginner",
+  "track": "technical",
+  "productIdea": "A portal for school clubs to manage membership, events, announcements, and permissions while keeping student privacy first.",
+  "targetAudience": "Students, advisors, and club organizers.",
+  "problemStatement": "Club information is scattered across emails and messaging apps, events are poorly communicated, and student privacy is not consistently protected.",
+  "constraints": "Keep the first release student-privacy first. Make permissions explicit. Avoid collecting unnecessary student data.",
+  "desiredOutput": "A build-ready markdown workspace with phased planning, student role definitions, privacy boundaries, gates, verification files, handoff context, and enough clarity for a school club portal.",
+  "mustHaveFeatures": "Club membership, event creation and sign-up, announcements, role-based permissions, student privacy guardrails.",
+  "niceToHaveFeatures": "Event photos, parent visibility, attendance tracking, club budget tracking.",
+  "dataAndIntegrations": "Students, clubs, events, announcements, permissions, membership records.",
+  "risks": "Student privacy must be protected, advisor oversight must be clear, and event sign-up could expose student interests.",
+  "successMetrics": "A reviewer can understand student roles, privacy boundaries, event workflow, and what evidence proves the portal is safe for students.",
+  "nonGoals": "No grades integration, no school-wide directory, no payment collection in v1.",
+  "timeline": "Plan a realistic first release that proves the club workflow works before adding richer features.",
+  "teamContext": "A student club advisor uses Xelera Method to prepare the portal plan and then hands the workspace to Codex, Claude Code, OpenCode, or a development team for phased implementation.",
+  "questionnaireAnswers": {
+    "north-star": "The first release must prove that students can join clubs, see events, and receive announcements while privacy guardrails stay explicit.",
+    "primary-workflow": "A student joins a club, views upcoming events, signs up for events, and receives announcements. Advisors oversee club activity and permissions.",
+    "scope-cut": "Keep membership, events, announcements, and permissions in v1. Defer grades integration, school-wide directory, and payments.",
+    "acceptance": "A reviewer should be able to trace student roles, privacy boundaries, and event workflow without hidden assumptions.",
+    "operating-risks": "The main risks are student privacy breaches, unclear advisor oversight, and event sign-up exposing sensitive interests.",
+    "repo-shape": "The project should have clear modules for clubs, events, announcements, permissions, and student profiles with privacy boundaries.",
+    "test-proof": "Reviewers should confirm permission boundaries, event visibility rules, and student data minimization before advancement."
+  }
+}

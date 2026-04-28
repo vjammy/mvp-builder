@@ -1,0 +1,31 @@
+{
+  "productName": "Small Clinic Scheduler",
+  "level": "advanced",
+  "track": "technical",
+  "productIdea": "A clinic scheduling workspace that helps staff manage provider availability, patient appointments, reminder rules, and conflict handling.",
+  "targetAudience": "Clinic schedulers, providers, front-desk staff, and practice managers.",
+  "problemStatement": "Small clinics often manage schedules through fragmented tools, which causes double-bookings, reminder mistakes, and privacy-sensitive communication issues.",
+  "constraints": "Keep the first release local-first. Make provider availability, reminder wording, and privacy boundaries explicit. Avoid unsupported clinical claims.",
+  "desiredOutput": "A build-ready markdown workspace with phased planning, provider availability rules, privacy boundaries, gates, verification files, handoff context, and enough clarity for a clinic scheduling tool.",
+  "mustHaveFeatures": "Provider availability, appointment requests, conflict handling, reminder planning, schedule review, privacy-safe communication boundaries.",
+  "niceToHaveFeatures": "Patient intake forms, cancellation workflow, waitlist management, provider preference settings.",
+  "dataAndIntegrations": "Providers, appointment slots, appointment requests, reminder preferences, conflict states, clinic schedule notes.",
+  "risks": "Reminder content may expose sensitive details, provider conflicts could be mishandled, and privacy boundaries could stay vague.",
+  "successMetrics": "A reviewer can understand provider conflict rules, reminder limits, and what evidence proves scheduling safety.",
+  "nonGoals": "No billing, no insurance integrations, no full EHR system.",
+  "timeline": "Plan a realistic first release that proves the clinic scheduling workflow works before adding richer features.",
+  "teamContext": "A clinic operations lead uses Xelera Method to prepare the scheduler plan and then hands the workspace to Codex, Claude Code, OpenCode, or a development team for phased implementation.",
+  "questionnaireAnswers": {
+    "north-star": "The first release must make provider availability, reminder boundaries, and conflict handling explicit and reviewable.",
+    "primary-workflow": "A scheduler reviews provider availability, books or adjusts appointments, resolves conflicts, and prepares reminder content with privacy limits.",
+    "data-boundaries": "Important boundaries include provider calendars, appointment requests, reminder fields, conflict states, and privacy-sensitive scheduling notes.",
+    "scope-cut": "Keep provider availability, conflict handling, and reminder boundaries in v1. Defer billing, insurance, and deeper patient record features.",
+    "acceptance": "A skeptical reviewer should be able to confirm reminder privacy rules, provider conflict handling, and explicit deferrals.",
+    "operating-risks": "The biggest risks are sensitive reminder wording, provider double-booking, and hidden privacy assumptions.",
+    "deployment-guardrails": "Keep the package local-first and force explicit privacy review before anything sounds production ready.",
+    "test-proof": "Reviewers should capture conflict scenarios, reminder wording checks, and observed scheduling outcomes before advancement.",
+    "failure-modes": "Double-booking when provider availability is not checked, reminder content leaking sensitive details, cancellation not updating waitlist.",
+    "observability": "Track booking success rate, cancellation rate, conflict resolution time, and reminder delivery status.",
+    "scaling-risk": "Concurrent bookings for the same provider slot, reminder volume spikes, and growing patient lists."
+  }
+}

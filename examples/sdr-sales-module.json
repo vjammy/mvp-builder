@@ -1,0 +1,27 @@
+{
+  "productName": "SDR Sales Module",
+  "level": "intermediate",
+  "track": "business",
+  "productIdea": "A sales development workspace that helps SDRs capture leads, plan outreach sequences, track qualification signals, and hand off qualified leads to account executives with clear context.",
+  "targetAudience": "SDRs, sales managers, account executives, and sales operations staff.",
+  "problemStatement": "SDRs often lack clear qualification criteria, follow-up sequences are inconsistent, and handoffs to AEs lose critical context about lead quality and next steps.",
+  "constraints": "Keep the first release focused on lead capture, sequence planning, and handoff clarity. Avoid complex CRM integration in v1. Keep the workflow simple enough for junior SDRs.",
+  "desiredOutput": "A build-ready markdown workspace with phased planning, qualification criteria, sequence templates, gates, verification files, handoff context, and enough clarity for an SDR coordination tool.",
+  "mustHaveFeatures": "Lead capture, sequence planning, SDR dashboard, email outreach tracking, qualification signals, rep handoff checklist, follow-up rules.",
+  "niceToHaveFeatures": "CRM integration, automated scoring, call recording notes, analytics dashboard, team leaderboard.",
+  "dataAndIntegrations": "Leads, sequences, outreach activities, qualification criteria, handoff records, SDR assignments.",
+  "risks": "Qualification criteria may be too vague, sequences may feel robotic, handoffs may still lose context, and SDRs may skip steps if the workflow is too complex.",
+  "successMetrics": "A reviewer can understand the qualification flow, sequence structure, handoff requirements, and what evidence proves an SDR is ready to advance a lead.",
+  "nonGoals": "No full CRM replacement, no marketing automation, no customer support ticketing, no billing integration in v1.",
+  "timeline": "Plan a realistic first release that proves the SDR workflow works before adding richer integrations or automation.",
+  "teamContext": "A sales operations lead uses Xelera Method to prepare the SDR module plan and then hands the workspace to Codex, Claude Code, OpenCode, or a development team for phased implementation.",
+  "questionnaireAnswers": {
+    "north-star": "The first release must prove that an SDR can capture a lead, follow a sequence, record qualification signals, and hand off to an AE with clear context.",
+    "primary-workflow": "An SDR captures a lead from a source, selects a sequence, sends outreach, records responses, updates qualification signals, and hands off qualified leads to an AE with a summary of interactions and next steps.",
+    "scope-cut": "Keep lead capture, sequence planning, outreach tracking, qualification signals, and handoff context in v1. Defer CRM integration, automated scoring, and advanced analytics.",
+    "acceptance": "A reviewer should be able to trace a lead from capture through qualification to handoff and understand what evidence proves each stage is complete.",
+    "operating-risks": "The biggest risks are vague qualification criteria, inconsistent sequence follow-through, lost handoff context, and SDRs skipping steps.",
+    "user-segments": "Primary users are SDRs. Secondary users are sales managers reviewing pipeline and AEs receiving handoffs.",
+    "stakeholder-workflow": "Sales ops defines sequences and criteria. SDRs execute outreach. Managers review pipeline. AEs receive qualified leads with context."
+  }
+}

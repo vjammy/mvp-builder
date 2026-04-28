@@ -1,0 +1,27 @@
+{
+  "productName": "Privvy Family Readiness",
+  "level": "advanced",
+  "track": "business",
+  "productIdea": "A family readiness workspace that helps households organize emergency contacts, important documents, and clear next steps without overclaiming legal or emergency authority.",
+  "targetAudience": "Parent organizers, co-parents, trusted caregivers, and adult family members responsible for readiness plans.",
+  "problemStatement": "Families keep critical readiness information scattered across conversations and files, which causes confusion, outdated guidance, and unsafe assumptions during stressful moments.",
+  "constraints": "Keep the first release local-first and markdown-first. Avoid legal advice, avoid emergency-response overclaiming, and keep sensitive family information explicit and reviewable.",
+  "desiredOutput": "A build-ready markdown workspace with phased planning, emergency boundary definitions, gates, verification files, handoff context, and enough clarity for a family readiness coordination tool.",
+  "mustHaveFeatures": "Readiness overview, emergency contact list, document checklist, household roles, caveat notes, emergency-mode boundaries, handoff workflow.",
+  "niceToHaveFeatures": "Document upload references, recurring review reminders, family member permissions, export to PDF.",
+  "dataAndIntegrations": "Family members, emergency contacts, document references, readiness notes, boundary disclaimers, and optional document links.",
+  "risks": "Emergency mode could overclaim authority, the package could sound like legal advice, privacy matters, and outdated family information could create false confidence.",
+  "successMetrics": "A reviewer can see what the product helps with, what it explicitly does not do, and what family readiness caveats must stay visible.",
+  "nonGoals": "No legal advice, no emergency dispatch integration, no cloud backend, no automatic document filing.",
+  "timeline": "Plan a realistic first release that proves the household readiness workflow works before adding richer integrations or automation.",
+  "teamContext": "A business-oriented product owner uses Xelera Method to prepare the readiness plan and then hands the workspace to Codex, Claude Code, OpenCode, or a development team for phased implementation.",
+  "questionnaireAnswers": {
+    "north-star": "The first release must help a family organize readiness information while clearly stating the limits of the tool.",
+    "primary-workflow": "A parent organizer sets up the family readiness workspace, records key contacts and documents, reviews emergency notes, and shares clear role expectations with other adults.",
+    "scope-cut": "Keep household readiness notes, boundary disclaimers, and family-role summaries in v1. Defer outside integrations and anything that looks like legal decision-making.",
+    "acceptance": "A skeptical reviewer should be able to see the emergency boundaries, the legal caveats, and the core family workflow without hidden assumptions.",
+    "operating-risks": "The biggest risks are emergency overclaiming, privacy mistakes, and stale family information.",
+    "monetization": "The value is reduced family confusion and faster access to critical information during stressful moments.",
+    "adoption-risks": "Families may not maintain the information, may share too broadly, or may treat the tool as legal advice."
+  }
+}

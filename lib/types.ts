@@ -95,6 +95,7 @@ export type PhasePlan = {
   index: number;
   slug: string;
   name: string;
+  phaseType: 'planning' | 'design' | 'implementation' | 'verification' | 'handoff' | 'finalization';
   goal: string;
   focusSummary: string;
   riskFocus: string[];
@@ -102,12 +103,20 @@ export type PhasePlan = {
   needsConfirmation: string[];
   inferredAssumptions: string[];
   nextActions: string[];
+  domainSignals: string[];
   entryCriteria: string[];
   implementationChecklist: string[];
   businessAcceptanceCriteria: string[];
   technicalAcceptanceCriteria: string[];
   testingRequirements: string[];
   exitCriteria: string[];
+  expectedOutputs: string[];
+  reviewChecklist: string[];
+  evidenceExamples: string[];
+  failureConditions: string[];
+  scopeGuards: string[];
+  continuityChecks: string[];
+  repoTargets: string[];
   implementationPromptPlaceholder: string;
   reviewPromptPlaceholder: string;
 };
@@ -136,6 +145,7 @@ export type ScoreBreakdown = {
   rating: 'Not ready' | 'Needs work' | 'Build ready' | 'Strong handoff';
   blockers: string[];
   recommendations: string[];
+  adjustments: string[];
 };
 
 export type ProfileConfig = {

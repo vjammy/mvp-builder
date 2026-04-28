@@ -1,0 +1,27 @@
+{
+  "productName": "Event Volunteer Manager",
+  "level": "beginner",
+  "track": "business",
+  "productIdea": "A volunteer coordination tool for events that helps organizers create shifts, volunteers sign up, and check-in status is tracked.",
+  "targetAudience": "Event organizers and volunteers.",
+  "problemStatement": "Volunteer shifts are hard to fill, no-shows create gaps, and organizers lack visibility into who is coming and who has checked in.",
+  "constraints": "Keep the first release simple with a clear check-in flow. Focus on shift coordination and day-of operations.",
+  "desiredOutput": "A build-ready markdown workspace with phased planning, shift state definitions, no-show handling rules, gates, verification files, handoff context, and enough clarity for a volunteer management tool.",
+  "mustHaveFeatures": "Shift setup, volunteer signup, check-in tracking, no-show handling, organizer dashboard.",
+  "niceToHaveFeatures": "Volunteer profiles, shift reminders, skill matching, recurring events.",
+  "dataAndIntegrations": "Shifts, volunteers, signups, check-ins, no-show records.",
+  "risks": "No-shows and shift gaps could derail events, organizers may not have backup plans, and volunteer data may be sensitive.",
+  "successMetrics": "A reviewer can trace shift creation, volunteer signup, check-in flow, and no-show response without hidden assumptions.",
+  "nonGoals": "No payment to volunteers, no complex skill certification, no multi-event analytics in v1.",
+  "timeline": "Plan a realistic first release that proves the volunteer coordination workflow works before adding richer features.",
+  "teamContext": "An event organizer uses Xelera Method to prepare the volunteer manager plan and then hands the workspace to Codex, Claude Code, OpenCode, or a development team for phased implementation.",
+  "questionnaireAnswers": {
+    "north-star": "The first release must prove that organizers can create shifts, volunteers can sign up, and check-in status is tracked.",
+    "primary-workflow": "An organizer creates event shifts, volunteers browse and sign up, the organizer sees signup status, and volunteers check in on the day of the event.",
+    "scope-cut": "Keep shift creation, volunteer signup, check-in, and no-show handling in v1. Defer payments, skill matching, and analytics.",
+    "acceptance": "A reviewer should be able to trace shift states, volunteer flow, and organizer dashboard without hidden assumptions.",
+    "operating-risks": "The main risks are no-shows creating gaps, organizers lacking backup plans, and volunteer contact data exposure.",
+    "customer-pain": "Organizers scramble to fill gaps when volunteers do not show up, and they have no visibility into who is actually present.",
+    "business-proof": "Fewer event disruptions, clearer volunteer accountability, and better organizer planning."
+  }
+}

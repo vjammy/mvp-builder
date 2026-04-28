@@ -1,0 +1,27 @@
+{
+  "productName": "Local Restaurant Ordering",
+  "level": "beginner",
+  "track": "business",
+  "productIdea": "A pickup-first ordering app for a local restaurant that keeps customer ordering, kitchen acknowledgment, and pickup updates simple.",
+  "targetAudience": "Restaurant staff, kitchen staff, and pickup customers.",
+  "problemStatement": "Phone orders and ad hoc messaging cause missed items, unclear order state, and customer confusion around pickup timing.",
+  "constraints": "Keep the first release focused on pickup, not delivery. Keep the workflow simple for staff and customers.",
+  "desiredOutput": "A build-ready markdown workspace with phased planning, order state definitions, kitchen handoff rules, gates, verification files, handoff context, and enough clarity for a restaurant ordering app.",
+  "mustHaveFeatures": "Menu browsing, order creation, order states, kitchen acknowledgment, ready-for-pickup status, customer pickup updates.",
+  "niceToHaveFeatures": "Delivery planning, loyalty program, multi-location support, online payment integration.",
+  "dataAndIntegrations": "Menu items, orders, order states, kitchen queue, pickup timestamps.",
+  "risks": "Kitchen workflow confusion, pickup delays, and unclear order status could break trust quickly.",
+  "successMetrics": "A reviewer can understand how an order moves from creation to kitchen acknowledgment to pickup and what evidence proves failure handling.",
+  "nonGoals": "No delivery, no loyalty program, no marketplace integrations.",
+  "timeline": "Plan a realistic first release that proves the pickup workflow works before adding delivery or loyalty features.",
+  "teamContext": "A restaurant owner uses Xelera Method to prepare the ordering app plan and then hands the workspace to Codex, Claude Code, OpenCode, or a development team for phased implementation.",
+  "questionnaireAnswers": {
+    "north-star": "The release must prove that pickup ordering and kitchen handoff are clear and reviewable.",
+    "primary-workflow": "A customer places a pickup order, staff confirm it, the kitchen acknowledges it, the order moves to ready state, and the customer picks it up.",
+    "scope-cut": "Keep pickup ordering, order states, and kitchen handoff in v1. Defer delivery, rewards, and complex integrations.",
+    "acceptance": "A reviewer should be able to trace order states, kitchen responsibility, and pickup communication without hidden assumptions.",
+    "operating-risks": "The main risks are missed order states, kitchen confusion, and bad pickup updates.",
+    "customer-pain": "Customers do not know when their order is ready, leading to cold food and frustration.",
+    "business-proof": "Fewer phone calls, clearer kitchen workflow, and happier customers."
+  }
+}

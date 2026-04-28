@@ -12,7 +12,8 @@
     "create-project": "tsx scripts/xelera-create-project.ts",
     "validate": "tsx scripts/xelera-validate.ts",
     "next-phase": "tsx scripts/xelera-next-phase.ts",
-    "status": "tsx scripts/xelera-status.ts"
+    "status": "tsx scripts/xelera-status.ts",
+    "test:quality-regression": "tsx scripts/test-quality-regression.ts"
   },
   "dependencies": {
     "@types/node": "^20.12.12",

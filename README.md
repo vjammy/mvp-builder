@@ -148,8 +148,10 @@ After the agent finishes a phase:
 
 1. Review the work.
 2. Open `phases/phase-XX/VERIFY_PROMPT.md`.
-3. Check `phases/phase-XX/EVIDENCE_CHECKLIST.md`.
-4. Fill out `phases/phase-XX/VERIFICATION_REPORT.md`.
+3. Run or follow `phases/phase-XX/TEST_SCRIPT.md`.
+4. Record results in `phases/phase-XX/TEST_RESULTS.md`.
+5. Check `phases/phase-XX/EVIDENCE_CHECKLIST.md`.
+6. Fill out `phases/phase-XX/VERIFICATION_REPORT.md`.
 
 Important verification rules:
 
@@ -157,6 +159,7 @@ Important verification rules:
 - `## recommendation:` must be `proceed`, `revise`, `blocked`, or `pending`
 - `## evidence files` must list real files if you want to advance
 - `- pending` is only a placeholder and does not count as real evidence
+- A phase cannot be considered ready just because files exist. Tests must be run and recorded first.
 
 ## Validate The Package
 
@@ -170,6 +173,15 @@ What you should see:
 
 - a success message if required files and verification fields are valid
 - or a list of specific problems if something is missing or malformed
+
+Validation now checks the testing layer:
+
+- Root testing files: `TESTING_STRATEGY.md`, `REGRESSION_TEST_PLAN.md`, `TEST_SCRIPT_INDEX.md`
+- Per-phase testing files: `TEST_SCRIPT.md` and `TEST_RESULTS.md` in every phase folder
+- Regression suite files in `/regression-suite/`
+- `TEST_RESULTS.md` must start as `pending` by design
+- Generic or fake test evidence is rejected
+- Contradictions between verification reports and test results are caught
 
 Validation tells you whether the package structure is healthy. It does not automatically mean the package is ready to advance.
 
@@ -235,17 +247,55 @@ The normal lifecycle loop is:
 
 ## Exported Workspace Contents
 
-Every generated workspace includes beginner guidance and phase files such as:
+Every generated workspace includes beginner guidance, phase files, a testing layer, and a regression suite:
 
+### Root files
 - `START_HERE.md`
 - `PROJECT_BRIEF.md`
 - `00_PROJECT_CONTEXT.md`
 - `01_CONTEXT_RULES.md`
+- `AGENTS.md` (includes Core Agent Operating Rules)
 - `CODEX_START_HERE.md`
 - `CLAUDE_START_HERE.md`
 - `OPENCODE_START_HERE.md`
+- `TESTING_STRATEGY.md`
+- `REGRESSION_TEST_PLAN.md`
+- `TEST_SCRIPT_INDEX.md`
 - `repo/xelera-state.json`
-- `phases/phase-01/...`
+
+### Per-phase files (inside each `phases/phase-XX/` folder)
+- `PHASE_BRIEF.md`
+- `ENTRY_GATE.md`
+- `EXIT_GATE.md`
+- `TEST_PLAN.md`
+- `TEST_SCRIPT.md` — concrete test steps with pass/fail criteria
+- `TEST_RESULTS.md` — fillable test results template (defaults to pending)
+- `VERIFY_PROMPT.md`
+- `EVIDENCE_CHECKLIST.md`
+- `VERIFICATION_REPORT.md`
+- `HANDOFF_SUMMARY.md`
+- `NEXT_PHASE_CONTEXT.md`
+
+### Regression suite (inside `/regression-suite/`)
+- `README.md`
+- `RUN_REGRESSION.md`
+- `REGRESSION_CHECKLIST.md`
+- `REGRESSION_RESULTS_TEMPLATE.md`
+- `scripts/artifact-integrity.md`
+- `scripts/gate-consistency.md`
+- `scripts/evidence-quality.md`
+- `scripts/handoff-continuity.md`
+- `scripts/agent-rules.md`
+- `scripts/local-first.md`
+
+The regression suite is a reusable, project-specific asset designed to be run repeatedly throughout the project lifecycle — not just during initial generation. It uses manual markdown-based procedures with copyable commands and concrete checks.
+
+### Regression suite rules
+
+- Each script has a clear purpose, inputs, step-by-step checks, pass criteria, fail criteria, evidence to capture, and stop conditions.
+- `REGRESSION_RESULTS_TEMPLATE.md` starts as `pending` by design. Do not pre-fill it with passing results.
+- Regression results must include concrete evidence. Generic claims like "looks good" or "no issues" are rejected by validation.
+- Run the full suite after every major phase, before `next-phase`, before handoff, and before committing production code.
 
 ## Repo Notes
 

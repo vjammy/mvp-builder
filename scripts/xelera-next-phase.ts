@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import {
   assessEvidenceFilesForApproval,
   fileExists,
+  findVerificationBodyContradictions,
   getArg,
   getPhaseSlug,
   parseExitGateResult,
@@ -87,6 +88,9 @@ export function runNextPhase() {
     }
     if (exitGateResult !== 'pass') {
       throw new Error('Cannot advance phase because verification report does not contain a pass result.');
+    }
+    if (findVerificationBodyContradictions(reportContent)) {
+      throw new Error('Verification report headers say pass/proceed, but the report body appears to describe a blocked or failed phase.');
     }
 
     const reportEvidenceFiles = parseVerificationEvidenceFiles(reportContent);

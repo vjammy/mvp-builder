@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   assessEvidenceFilesForApproval,
+  findVerificationBodyContradictions,
   getArg,
   getPhaseSlug,
   parseExitGateResult,
@@ -14,9 +15,162 @@ import {
   resolvePackageRoot
 } from './xelera-package-utils';
 
+const GENERIC_TEST_PHRASES = [
+  'run the tests and confirm everything works',
+  'verify implementation is correct',
+  'check all files',
+  'all tests passed',
+  'evidence: completed',
+  'no issues found',
+  'looks good',
+  'everything passes',
+  'ready to proceed'
+];
+
+const DISALLOWED_TEST_RESULT_DEFAULTS = ['pass', 'passed', 'complete', 'ready', 'approved'];
+
+function containsGenericTestContent(content: string) {
+  const normalized = content.toLowerCase();
+  return GENERIC_TEST_PHRASES.some((phrase) => normalized.includes(phrase));
+}
+
+function parseTestResult(content: string): string | undefined {
+  const headerMatch = content.match(/##\s*Final result:\s*(.+)/i);
+  const raw = headerMatch?.[1]?.trim().toLowerCase();
+  return raw;
+}
+
+function hasRealTestEvidence(content: string): boolean {
+  const lines = content.split('\n').map((l) => l.trim()).filter(Boolean);
+  const templateIndicators = [
+    (line: string) => line.startsWith('#'),
+    (line: string) => line === '-',
+    (line: string) => line === 'pending',
+    (line: string) => line.startsWith('Allowed:'),
+    (line: string) => line.startsWith('## Final result:'),
+    (line: string) => line.startsWith('## Recommendation:'),
+    (line: string) => line.startsWith('## Overall result:'),
+    (line: string) => line.startsWith('## Date'),
+    (line: string) => line.startsWith('## Phase name'),
+    (line: string) => line.startsWith('## Tester/agent'),
+    (line: string) => line.startsWith('## Runner'),
+    (line: string) => line.startsWith('## Suite version'),
+    (line: string) => line.startsWith('- [ ]'),
+    (line: string) => /^-\s+\w+[-\s\w]*:\s+pending$/.test(line),
+    (line: string) => line.toLowerCase().includes('do not pre-fill'),
+    (line: string) => line.toLowerCase().includes('record the test results for this phase here'),
+    (line: string) => line.toLowerCase().includes('record the results of running the regression suite here'),
+    (line: string) => line.toLowerCase().includes('what this file is for'),
+    (line: string) => line.toLowerCase().includes('generated with project package')
+  ];
+  // Require at least a few non-template lines to count as real evidence
+  const nonTemplateLines = lines.filter((line) => !templateIndicators.some((fn) => fn(line)));
+  return nonTemplateLines.length >= 2 && nonTemplateLines.join(' ').length >= 40;
+}
+
+function parseRegressionResult(content: string): string | undefined {
+  const headerMatch = content.match(/##\s*Overall result:\s*(.+)/i);
+  const raw = headerMatch?.[1]?.trim().toLowerCase();
+  return raw;
+}
+
+const REQUIRED_MODULE_FILES = {
+  'product-strategy': [
+    'PRODUCT_STRATEGY_START_HERE.md',
+    'PRODUCT_NORTH_STAR.md',
+    'TARGET_USERS.md',
+    'MVP_SCOPE.md',
+    'OUT_OF_SCOPE.md',
+    'SUCCESS_METRICS.md',
+    'TRADEOFF_LOG.md',
+    'PRODUCT_STRATEGY_GATE.md'
+  ],
+  requirements: [
+    'REQUIREMENTS_START_HERE.md',
+    'FUNCTIONAL_REQUIREMENTS.md',
+    'NON_FUNCTIONAL_REQUIREMENTS.md',
+    'ACCEPTANCE_CRITERIA.md',
+    'OPEN_QUESTIONS.md',
+    'REQUIREMENTS_RISK_REVIEW.md',
+    'REQUIREMENTS_GATE.md'
+  ],
+  'security-risk': [
+    'SECURITY_START_HERE.md',
+    'DATA_CLASSIFICATION.md',
+    'SECRET_MANAGEMENT.md',
+    'PRIVACY_RISK_REVIEW.md',
+    'AUTHORIZATION_REVIEW.md',
+    'DEPENDENCY_RISK_CHECKLIST.md',
+    'SECURITY_GATE.md'
+  ],
+  integrations: [
+    'INTEGRATION_START_HERE.md',
+    'EXTERNAL_SERVICES.md',
+    'API_KEYS_AND_SECRETS.md',
+    'ENVIRONMENT_VARIABLES.md',
+    'WEBHOOKS.md',
+    'FAILURE_MODES.md',
+    'MOCKING_STRATEGY.md',
+    'INTEGRATION_TEST_PLAN.md',
+    'INTEGRATION_GATE.md'
+  ],
+  architecture: [
+    'ARCHITECTURE_START_HERE.md',
+    'SYSTEM_OVERVIEW.md',
+    'DATA_MODEL.md',
+    'API_CONTRACTS.md',
+    'STATE_MANAGEMENT.md',
+    'ARCHITECTURE_DECISIONS.md',
+    'ARCHITECTURE_GATE.md'
+  ]
+} as const;
+
+function readOptionalInput(packageRoot: string) {
+  const inputPath = path.join(packageRoot, 'repo', 'input.json');
+  if (!fs.existsSync(inputPath)) return undefined;
+  try {
+    return JSON.parse(fs.readFileSync(inputPath, 'utf8')) as {
+      productName?: string;
+      productIdea?: string;
+      problemStatement?: string;
+      mustHaveFeatures?: string;
+      dataAndIntegrations?: string;
+      nonGoals?: string;
+      constraints?: string;
+      risks?: string;
+      targetAudience?: string;
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function fileContainsAll(filePath: string, patterns: RegExp[]) {
+  if (!fs.existsSync(filePath)) return false;
+  const content = fs.readFileSync(filePath, 'utf8');
+  return patterns.every((pattern) => pattern.test(content));
+}
+
+function projectNeedsSecurity(input?: ReturnType<typeof readOptionalInput>) {
+  const source = Object.values(input || {}).join(' ');
+  return /private|privacy|sensitive|medical|health|financial|money|legal|family|child|student|role|permission|record|document/i.test(source);
+}
+
+function projectNeedsIntegration(input?: ReturnType<typeof readOptionalInput>) {
+  const source = Object.values(input || {}).join(' ');
+  return /api|external service|integration|payment|email|oauth|webhook|storage|database|calendar|slack|crm/i.test(source) && !/future .*integration/i.test(source);
+}
+
+function architectureLooksOverbuilt(systemOverview: string, outOfScope: string, input?: ReturnType<typeof readOptionalInput>) {
+  const complexitySignals = /(microservices|kubernetes|service mesh|event bus|multi-region|data lake|distributed system)/i;
+  const simpleMvpSignals = /(local-first|markdown-first|no database|no auth|first release|mvp)/i;
+  return complexitySignals.test(systemOverview) && (simpleMvpSignals.test(outOfScope) || simpleMvpSignals.test(Object.values(input || {}).join(' ')));
+}
+
 export function runValidate() {
   const packageRoot = resolvePackageRoot(getArg('package'));
   const issues: string[] = [];
+  const input = readOptionalInput(packageRoot);
 
   let manifest: ReturnType<typeof readManifest> | undefined;
   let state: ReturnType<typeof readState> | undefined;
@@ -87,6 +241,12 @@ export function runValidate() {
   // Required root files
   const requiredRootFiles = [
     'README.md',
+    'BUSINESS_USER_START_HERE.md',
+    'CURRENT_STATUS.md',
+    'COPY_PASTE_PROMPTS.md',
+    'MODULE_MAP.md',
+    'WHAT_TO_IGNORE_FOR_NOW.md',
+    'FINAL_CHECKLIST.md',
     'QUICKSTART.md',
     'TROUBLESHOOTING.md',
     'START_HERE.md',
@@ -115,6 +275,246 @@ export function runValidate() {
     }
   }
 
+  // Required root testing files
+  const requiredRootTestingFiles = [
+    'TESTING_STRATEGY.md',
+    'REGRESSION_TEST_PLAN.md',
+    'TEST_SCRIPT_INDEX.md'
+  ];
+  for (const file of requiredRootTestingFiles) {
+    if (!fs.existsSync(path.join(packageRoot, file))) {
+      issues.push(`Missing required root testing file: ${file}.`);
+    }
+  }
+
+  // Required regression suite files
+  const requiredRegressionFiles = [
+    'regression-suite/README.md',
+    'regression-suite/RUN_REGRESSION.md',
+    'regression-suite/REGRESSION_CHECKLIST.md',
+    'regression-suite/REGRESSION_RESULTS_TEMPLATE.md',
+    'regression-suite/scripts/README.md',
+    'regression-suite/scripts/run-all.md',
+    'regression-suite/scripts/run-regression.ts',
+    'regression-suite/scripts/artifact-integrity.md',
+    'regression-suite/scripts/gate-consistency.md',
+    'regression-suite/scripts/evidence-quality.md',
+    'regression-suite/scripts/handoff-continuity.md',
+    'regression-suite/scripts/agent-rules.md',
+    'regression-suite/scripts/local-first.md'
+  ];
+  for (const file of requiredRegressionFiles) {
+    if (!fs.existsSync(path.join(packageRoot, file))) {
+      issues.push(`Missing required regression suite file: ${file}.`);
+    }
+  }
+
+  for (const [folder, files] of Object.entries(REQUIRED_MODULE_FILES)) {
+    for (const file of files) {
+      const fullPath = path.join(packageRoot, folder, file);
+      if (!fs.existsSync(fullPath)) {
+        issues.push(`Missing required module file: ${folder}/${file}.`);
+      }
+    }
+  }
+
+  const productNorthStarPath = path.join(packageRoot, 'product-strategy/PRODUCT_NORTH_STAR.md');
+  if (
+    !fileContainsAll(productNorthStarPath, [
+      /Plain-English product goal/i,
+      /Target user/i,
+      /Main problem/i,
+      /Desired outcome/i,
+      /What success looks like/i,
+      /What failure looks like/i
+    ])
+  ) {
+    issues.push('product-strategy/PRODUCT_NORTH_STAR.md is missing one or more required sections.');
+  }
+
+  const mvpScopePath = path.join(packageRoot, 'product-strategy/MVP_SCOPE.md');
+  if (
+    !fileContainsAll(mvpScopePath, [
+      /Must-have features/i,
+      /Should-have features/i,
+      /Later features/i,
+      /Explicit non-goals/i
+    ])
+  ) {
+    issues.push('product-strategy/MVP_SCOPE.md must include must-have, should-have, later, and explicit non-goal sections.');
+  }
+
+  const outOfScopePath = path.join(packageRoot, 'product-strategy/OUT_OF_SCOPE.md');
+  if (
+    !fileContainsAll(outOfScopePath, [
+      /Features not to build yet/i,
+      /Architecture not to add yet/i,
+      /Integrations not to add yet/i,
+      /Reasons these items are out of scope/i
+    ])
+  ) {
+    issues.push('product-strategy/OUT_OF_SCOPE.md is missing one or more required sections.');
+  }
+
+  const acceptanceCriteriaPath = path.join(packageRoot, 'requirements/ACCEPTANCE_CRITERIA.md');
+  if (
+    !fileContainsAll(acceptanceCriteriaPath, [
+      /Clear pass\/fail check/i,
+      /Evidence required/i,
+      /Test or manual verification method/i,
+      /Related files/i
+    ])
+  ) {
+    issues.push('requirements/ACCEPTANCE_CRITERIA.md is missing required acceptance evidence sections.');
+  }
+
+  const openQuestionsPath = path.join(packageRoot, 'requirements/OPEN_QUESTIONS.md');
+  if (
+    !fileContainsAll(openQuestionsPath, [/Unresolved assumption/i, /Owner/i, /Priority/i, /Impact if unanswered/i, /When it must be answered/i])
+  ) {
+    issues.push('requirements/OPEN_QUESTIONS.md is missing required open-question fields.');
+  }
+
+  if (
+    !fileContainsAll(path.join(packageRoot, 'security-risk/DATA_CLASSIFICATION.md'), [
+      /Data types handled/i,
+      /Sensitivity level/i,
+      /Where data is stored/i,
+      /Who can access it/i,
+      /Retention notes/i,
+      /Risk notes/i
+    ])
+  ) {
+    issues.push('security-risk/DATA_CLASSIFICATION.md is missing required data classification fields.');
+  }
+
+  if (
+    !fileContainsAll(path.join(packageRoot, 'security-risk/SECRET_MANAGEMENT.md'), [
+      /Expected secrets/i,
+      /Where secrets should live/i,
+      /What must never be committed/i,
+      /Local development handling/i,
+      /Deployment handling if applicable/i
+    ])
+  ) {
+    issues.push('security-risk/SECRET_MANAGEMENT.md is missing required secret-management sections.');
+  }
+
+  if (
+    !fileContainsAll(path.join(packageRoot, 'integrations/ENVIRONMENT_VARIABLES.md'), [
+      /Variable name/i,
+      /Purpose/i,
+      /Required or optional/i,
+      /Example placeholder/i,
+      /Local setup notes/i
+    ])
+  ) {
+    issues.push('integrations/ENVIRONMENT_VARIABLES.md is missing required environment-variable sections.');
+  }
+
+  if (
+    !fileContainsAll(path.join(packageRoot, 'integrations/MOCKING_STRATEGY.md'), [
+      /What to mock before real credentials exist/i,
+      /Mock data/i,
+      /Local test behavior/i,
+      /When to replace mocks with real services/i
+    ])
+  ) {
+    issues.push('integrations/MOCKING_STRATEGY.md is missing required mocking strategy sections.');
+  }
+
+  const systemOverviewPath = path.join(packageRoot, 'architecture/SYSTEM_OVERVIEW.md');
+  if (
+    !fileContainsAll(systemOverviewPath, [
+      /Simple architecture summary/i,
+      /Main components/i,
+      /Data flow/i,
+      /User flow/i,
+      /Integration points/i,
+      /What is intentionally not included/i
+    ])
+  ) {
+    issues.push('architecture/SYSTEM_OVERVIEW.md is missing required system overview sections.');
+  }
+
+  if (
+    !fileContainsAll(path.join(packageRoot, 'architecture/DATA_MODEL.md'), [
+      /Entities/i,
+      /Fields/i,
+      /Relationships/i,
+      /Validation rules/i,
+      /Sample records/i,
+      /Risks/i
+    ])
+  ) {
+    issues.push('architecture/DATA_MODEL.md is missing required data-model sections.');
+  }
+
+  if (projectNeedsSecurity(input) && !fs.existsSync(path.join(packageRoot, 'security-risk/SECURITY_GATE.md'))) {
+    issues.push('This project appears to handle private or sensitive data, but /security-risk/ is incomplete.');
+  }
+
+  if (projectNeedsIntegration(input) && !fs.existsSync(path.join(packageRoot, 'integrations/INTEGRATION_GATE.md'))) {
+    issues.push('This project appears to need external services, but /integrations/ is incomplete.');
+  }
+
+  const systemOverviewContent = fs.existsSync(systemOverviewPath) ? fs.readFileSync(systemOverviewPath, 'utf8') : '';
+  const outOfScopeContent = fs.existsSync(outOfScopePath) ? fs.readFileSync(outOfScopePath, 'utf8') : '';
+  if (architectureLooksOverbuilt(systemOverviewContent, outOfScopeContent, input)) {
+    issues.push('architecture/SYSTEM_OVERVIEW.md appears more complex than the approved MVP scope.');
+  }
+
+  const startHereContent = fs.existsSync(path.join(packageRoot, 'START_HERE.md'))
+    ? fs.readFileSync(path.join(packageRoot, 'START_HERE.md'), 'utf8')
+    : '';
+  if (!/do not need to open every folder/i.test(startHereContent)) {
+    issues.push('START_HERE.md must tell the user they do not need to open every folder.');
+  }
+
+  const stepGuideContent = fs.existsSync(path.join(packageRoot, 'STEP_BY_STEP_BUILD_GUIDE.md'))
+    ? fs.readFileSync(path.join(packageRoot, 'STEP_BY_STEP_BUILD_GUIDE.md'), 'utf8')
+    : '';
+  if (!/## 1\. Decide/i.test(stepGuideContent) || !/## 2\. Plan/i.test(stepGuideContent) || !/## 3\. Design/i.test(stepGuideContent) || !/## 4\. Build/i.test(stepGuideContent) || !/## 5\. Test/i.test(stepGuideContent) || !/## 6\. Handoff/i.test(stepGuideContent)) {
+    issues.push('STEP_BY_STEP_BUILD_GUIDE.md must keep the Decide / Plan / Design / Build / Test / Handoff journey.');
+  }
+
+  const moduleMapContent = fs.existsSync(path.join(packageRoot, 'MODULE_MAP.md'))
+    ? fs.readFileSync(path.join(packageRoot, 'MODULE_MAP.md'), 'utf8')
+    : '';
+  for (const phrase of [
+    'Product Goal and Scope',
+    'What the App Must Do',
+    'Private Data and Safety Check',
+    'External Services and Setup',
+    'Technical Plan'
+  ]) {
+    if (!moduleMapContent.includes(phrase)) {
+      issues.push(`MODULE_MAP.md must include "${phrase}".`);
+    }
+  }
+
+  const promptsContent = fs.existsSync(path.join(packageRoot, 'COPY_PASTE_PROMPTS.md'))
+    ? fs.readFileSync(path.join(packageRoot, 'COPY_PASTE_PROMPTS.md'), 'utf8')
+    : '';
+  for (const phrase of [
+    'Confirm Product Goal and Scope',
+    'Confirm What the App Must Do',
+    'Review Private Data and Safety',
+    'Review External Services and Setup',
+    'Review Technical Plan'
+  ]) {
+    if (!promptsContent.includes(phrase)) {
+      issues.push(`COPY_PASTE_PROMPTS.md must include "${phrase}".`);
+    }
+  }
+
+  const businessStartContent = fs.existsSync(path.join(packageRoot, 'BUSINESS_USER_START_HERE.md'))
+    ? fs.readFileSync(path.join(packageRoot, 'BUSINESS_USER_START_HERE.md'), 'utf8')
+    : '';
+  if (!/plain english/i.test(businessStartContent) || !/do not need to open every folder/i.test(businessStartContent)) {
+    issues.push('Beginner-facing docs should stay plain-English and remind the user they do not need to open every folder.');
+  }
+
   // Phase-level validation
   for (let index = 1; index <= manifest.phaseCount; index += 1) {
     const slug = getPhaseSlug(index);
@@ -136,6 +536,45 @@ export function runValidate() {
     for (const file of phaseFiles) {
       if (!fs.existsSync(path.join(packageRoot, file))) {
         issues.push(`Missing required phase packet file: ${file}.`);
+      }
+    }
+
+    // Per-phase testing files
+    const testScriptPath = path.join(packageRoot, `phases/${slug}/TEST_SCRIPT.md`);
+    const testResultsPath = path.join(packageRoot, `phases/${slug}/TEST_RESULTS.md`);
+
+    if (!fs.existsSync(testScriptPath)) {
+      issues.push(`Missing required phase testing file: phases/${slug}/TEST_SCRIPT.md.`);
+    } else {
+      const testScriptContent = fs.readFileSync(testScriptPath, 'utf8');
+      const requiredSections = [
+        '## What this file is for',
+        '## Commands or manual procedures',
+        '## Manual review checks',
+        '## Pass/fail criteria',
+        '## Failure handling',
+        '## Evidence recording'
+      ];
+      for (const section of requiredSections) {
+        if (!testScriptContent.includes(section)) {
+          issues.push(`TEST_SCRIPT.md for ${slug} is missing required section: ${section}`);
+        }
+      }
+      if (containsGenericTestContent(testScriptContent)) {
+        issues.push(`TEST_SCRIPT.md for ${slug} contains generic or fake test content. Replace vague instructions with concrete, phase-specific checks.`);
+      }
+    }
+
+    if (!fs.existsSync(testResultsPath)) {
+      issues.push(`Missing required phase testing file: phases/${slug}/TEST_RESULTS.md.`);
+    } else {
+      const testResultsContent = fs.readFileSync(testResultsPath, 'utf8');
+      const testResult = parseTestResult(testResultsContent);
+      if (testResult && DISALLOWED_TEST_RESULT_DEFAULTS.includes(testResult) && !hasRealTestEvidence(testResultsContent)) {
+        issues.push(`TEST_RESULTS.md for ${slug} defaults to "${testResult}". Newly generated test results must start as pending.`);
+      }
+      if (containsGenericTestContent(testResultsContent)) {
+        issues.push(`TEST_RESULTS.md for ${slug} contains generic or fake evidence. Replace vague claims with concrete, recorded results.`);
       }
     }
 
@@ -199,6 +638,11 @@ export function runValidate() {
           issues.push(`Verification report for ${slug} is inconsistent: result is "pass" but recommendation is "blocked". If the phase passed, recommendation should be "proceed" or "revise".`);
         }
         if (result === 'pass' && recommendation === 'proceed') {
+          if (findVerificationBodyContradictions(reportContent)) {
+            issues.push(
+              `Verification report for ${slug} headers say pass/proceed, but the report body appears to describe a blocked or failed phase.`
+            );
+          }
           const reportEvidence = parseVerificationEvidenceFiles(reportContent);
           if (reportEvidence.length === 0) {
             issues.push(`Verification report for ${slug} claims pass + proceed but does not list any evidence files under ## evidence files.`);
@@ -212,6 +656,27 @@ export function runValidate() {
               issues.push(`State evidenceFiles for ${slug} lists file that does not exist on disk: ${ef}`);
             }
           }
+        }
+      }
+
+      // Lifecycle contradiction: verification pass but test results pending
+      if (result === 'pass' && fs.existsSync(testResultsPath)) {
+        const testResultsContent = fs.readFileSync(testResultsPath, 'utf8');
+        const testResult = parseTestResult(testResultsContent);
+        if (testResult === 'pending') {
+          issues.push(`Verification report for ${slug} says pass, but TEST_RESULTS.md is still pending. Run the test script and record real results before claiming pass.`);
+        }
+        if (testResult === 'fail') {
+          issues.push(`Verification report for ${slug} says pass, but TEST_RESULTS.md says fail. Resolve the test failure or update the verification report to reflect the actual state.`);
+        }
+      }
+
+      // Lifecycle contradiction: verification fail/revise but next-phase context suggests readiness
+      if ((result === 'fail' || recommendation === 'blocked' || recommendation === 'revise') && fs.existsSync(testResultsPath)) {
+        const testResultsContent = fs.readFileSync(testResultsPath, 'utf8');
+        const testResult = parseTestResult(testResultsContent);
+        if (testResult === 'pass') {
+          issues.push(`TEST_RESULTS.md for ${slug} says pass, but the verification report says ${result}/${recommendation}. These files must agree before the phase can advance.`);
         }
       }
     }
@@ -237,6 +702,34 @@ export function runValidate() {
       issues.push(`Previous phase evidence missing for ${previousSlug}.`);
     } else if (!previousEvidence.approvedToProceed) {
       issues.push(`Current phase advanced without approval or evidence for ${previousSlug}. Run validate and verify the previous phase before continuing.`);
+    }
+  }
+
+  const scorecardPath = path.join(packageRoot, 'SCORECARD.md');
+  if (fs.existsSync(scorecardPath)) {
+    const scorecard = fs.readFileSync(scorecardPath, 'utf8');
+    if (manifest.lifecycleStatus === 'Blocked' && /## Rating\s+Build ready/i.test(scorecard)) {
+      issues.push('SCORECARD.md says "Build ready" even though the package lifecycle is Blocked.');
+    }
+    if (manifest.lifecycleStatus === 'Blocked' && /\|\s+\*\*Total\*\*\s+\|\s+\*\*(\d+)\/100\*\*\s+\|/i.test(scorecard)) {
+      const match = scorecard.match(/\|\s+\*\*Total\*\*\s+\|\s+\*\*(\d+)\/100\*\*\s+\|/i);
+      const total = Number(match?.[1] || '0');
+      if (total >= 72) {
+        issues.push(`SCORECARD.md shows ${total}/100 even though blocked packages must stay below the build-ready threshold.`);
+      }
+    }
+  }
+
+  // Regression results validation
+  const regressionResultsPath = path.join(packageRoot, 'regression-suite/REGRESSION_RESULTS_TEMPLATE.md');
+  if (fs.existsSync(regressionResultsPath)) {
+    const regressionContent = fs.readFileSync(regressionResultsPath, 'utf8');
+    const regressionResult = parseRegressionResult(regressionContent);
+    if (regressionResult && DISALLOWED_TEST_RESULT_DEFAULTS.includes(regressionResult) && !hasRealTestEvidence(regressionContent)) {
+      issues.push('REGRESSION_RESULTS_TEMPLATE.md defaults to pass. Regression results must start as pending until the suite is actually run.');
+    }
+    if (containsGenericTestContent(regressionContent)) {
+      issues.push('REGRESSION_RESULTS_TEMPLATE.md contains generic or fake evidence. Replace vague claims with concrete, recorded results.');
     }
   }
 
