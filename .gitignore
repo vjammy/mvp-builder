@@ -68,7 +68,11 @@ node_modules
 # Generated workspace directories
 /architecture/
 /auto-improve/
-/autoresearch/
+# Autoresearch keeps its static infrastructure docs (program description, README,
+# benchmark, rubrics) tracked because smoke-test.ts asserts they exist on disk.
+# Per-run outputs (results.tsv, reports/) are ignored individually.
+/autoresearch/results.tsv
+/autoresearch/reports/
 /gates/
 /integrations/
 /orchestrator/
@@ -80,6 +84,9 @@ node_modules
 /security-risk/
 /ui-ux/
 /repo/
+
+# Per-run command output captures from production-mode builds.
+/evidence/
 
 # Swarm test output
 /swarm-builds/
