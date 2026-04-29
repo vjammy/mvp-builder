@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import JSZip from 'jszip';
 import { generateProjectBundle } from '../lib/generator';
+import { readExtractions } from '../lib/research/persistence';
 import { baseProjectInput } from '../lib/templates';
 import type { ProjectInput } from '../lib/types';
 
@@ -61,8 +62,19 @@ export async function createArtifactPackage(options: {
   input: ProjectInput;
   outDir: string;
   zip?: boolean | string;
+  researchFrom?: string;
 }) {
-  const bundle = generateProjectBundle(options.input);
+  // Optionally hydrate extractions from a sibling research/ directory so the
+  // generator can build research-grounded requirements/non-functionals.
+  const extractions = options.researchFrom
+    ? readExtractions(path.resolve(options.researchFrom))
+    : undefined;
+  if (options.researchFrom && !extractions) {
+    console.warn(
+      `[create-project] --research-from=${options.researchFrom} did not contain valid research/extracted/*.json; falling back to archetype templating.`
+    );
+  }
+  const bundle = generateProjectBundle(options.input, { extractions: extractions ?? undefined });
   const outDir = path.resolve(options.outDir || bundle.exportRoot);
   const rootDir = path.join(outDir, bundle.exportRoot);
 
@@ -87,7 +99,8 @@ async function main() {
   const result = await createArtifactPackage({
     input,
     outDir: getArg('out') || generateProjectBundle(input).exportRoot,
-    zip: getArg('zip') || false
+    zip: getArg('zip') || false,
+    researchFrom: getArg('research-from')
   });
 
   console.log(`Created artifact package at ${result.rootDir}`);

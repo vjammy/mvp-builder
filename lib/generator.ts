@@ -1,6 +1,7 @@
 import { reconcileScoreWithLifecycle, scoreProject, withSemanticFit } from './scoring';
 import { detectArchetype, type ArchetypeDetection } from './archetype-detection';
 import { computeSemanticFit, type SemanticFit } from './semantic-fit';
+import type { ResearchExtractions } from './research/schema';
 import { buildQuestionPrompts, CORE_AGENT_OPERATING_RULES, getProfileConfig, slugify } from './templates';
 import {
   buildDomainOntology,
@@ -88,6 +89,7 @@ type ProjectContext = {
   riskFlags: RiskFlag[];
   uiRelevant: boolean;
   ontology: DomainOntology;
+  extractions?: ResearchExtractions;
 };
 
 type AgentName = 'Codex' | 'Claude Code' | 'OpenCode';
@@ -878,7 +880,7 @@ function findContradictions(input: ProjectInput) {
   return contradictions;
 }
 
-function buildContext(input: ProjectInput): ProjectContext {
+function buildContext(input: ProjectInput, extractions?: ResearchExtractions): ProjectContext {
   const profile = getProfileConfig(input);
   const mustHaves = splitItems(input.mustHaveFeatures);
   const niceToHaves = splitItems(input.niceToHaveFeatures);
@@ -943,7 +945,8 @@ function buildContext(input: ProjectInput): ProjectContext {
     domainSignals,
     riskFlags,
     uiRelevant,
-    ontology
+    ontology,
+    extractions
   };
 }
 
@@ -1493,7 +1496,12 @@ This folder turns the idea into build-ready requirements. It is the guardrail th
 `;
 }
 
+const FALLBACK_REQUIREMENTS_BANNER = `> ⚠️ Generated WITHOUT research extractions. Entities, actors, and sample data are templated from an 11-archetype keyword router and may not match the actual product. Run \`npm run research --input=<brief.json> --out=<workspace>\` and regenerate with \`--research-from=<workspace>\` before treating this workspace as build-ready.\n\n`;
+
 function buildFunctionalRequirements(input: ProjectInput, context: ProjectContext) {
+  if (context.extractions) {
+    return buildFunctionalRequirementsFromResearch(input, context.extractions);
+  }
   const scenarios: OntologyFeatureScenario[] = context.ontology.featureScenarios.length
     ? context.ontology.featureScenarios
     : [
@@ -1515,7 +1523,7 @@ function buildFunctionalRequirements(input: ProjectInput, context: ProjectContex
       ];
   return `# FUNCTIONAL_REQUIREMENTS
 
-${scenarios
+${FALLBACK_REQUIREMENTS_BANNER}${scenarios
     .map(
       (scenario, index) => `## Requirement ${index + 1}: ${sentenceCase(scenario.feature)}
 
@@ -1532,7 +1540,118 @@ ${scenarios
 `;
 }
 
+function buildFunctionalRequirementsFromResearch(input: ProjectInput, ex: ResearchExtractions) {
+  const actorById = new Map(ex.actors.map((a) => [a.id, a]));
+  const entityById = new Map(ex.entities.map((e) => [e.id, e]));
+
+  const requirements = ex.workflows.flatMap((wf, wfIdx) =>
+    wf.steps.map((step, stepIdx) => {
+      const actor = actorById.get(step.actor);
+      const entities = wf.entitiesTouched.map((id) => entityById.get(id)).filter(Boolean);
+      const reqId = `REQ-${String(wfIdx + 1).padStart(2, '0')}-${String(stepIdx + 1).padStart(2, '0')}`;
+      const sourceList = wf.sources
+        .slice(0, 2)
+        .map((s) => `[${s.title}](${s.url})`)
+        .join('; ');
+      const failureNote = wf.failureModes[0]
+        ? `On ${wf.failureModes[0].trigger.toLowerCase()}, ${wf.failureModes[0].mitigation.toLowerCase()}.`
+        : 'Failure surfaces clearly to the actor; no silent state.';
+      return `## ${reqId}: ${sentenceCase(step.action)}
+
+- Workflow: ${wf.name}
+- Actor: ${actor ? actor.name : step.actor} (${actor ? actor.type : 'unknown role'})
+- User action: ${step.action}
+- System response: ${step.systemResponse}
+- Entities touched: ${entities.map((e) => e!.name).join(', ') || '—'}
+- Acceptance signal: ${wf.acceptancePattern}
+- Failure handling: ${failureNote}
+- Sourced from: ${sourceList || 'research extractions'}`;
+    })
+  );
+
+  const conflictsBlock = ex.conflicts.length
+    ? `\n\n## Outstanding conflicts with the brief\n\n${ex.conflicts
+        .map(
+          (c) =>
+            `- **${c.severity}** (${c.field}): brief says "${c.briefAssertion}"; research finding: "${c.researchFinding}". Resolution status: \`${c.resolution}\`.`
+        )
+        .join('\n')}`
+    : '';
+
+  const antiBlock = ex.antiFeatures.length
+    ? `\n\n## Anti-features (deliberately out of scope)\n\n${ex.antiFeatures
+        .map((a) => `- ${a.description} (${a.rationale})`)
+        .join('\n')}`
+    : '';
+
+  return `# FUNCTIONAL_REQUIREMENTS
+
+> Generated from research extractions (research/extracted/). Every requirement traces to a researched workflow step with cited sources. See research/USE_CASE_RESEARCH.md and research/DOMAIN_RESEARCH.md for the supporting narratives.
+
+## Actors
+
+${ex.actors.map((a) => `- **${a.name}** (\`${a.id}\`, ${a.type}) — ${a.responsibilities.join('; ')}`).join('\n')}
+
+## Entities
+
+${ex.entities.map((e) => `- **${e.name}** (\`${e.id}\`) — ${e.description} Owners: ${e.ownerActors.join(', ')}.`).join('\n')}
+
+## Requirements (one per researched workflow step)
+
+${requirements.join('\n\n')}${antiBlock}${conflictsBlock}
+`;
+}
+
+function buildNonFunctionalRequirementsFromResearch(input: ProjectInput, ex: ResearchExtractions) {
+  const groupedRisks = ex.risks.reduce<Record<string, typeof ex.risks>>((acc, r) => {
+    (acc[r.category] ??= []).push(r);
+    return acc;
+  }, {});
+  const riskLines = Object.entries(groupedRisks)
+    .map(
+      ([cat, items]) =>
+        `### ${cat[0].toUpperCase() + cat.slice(1)}\n\n${items
+          .map((r) => `- **${r.severity}** — ${r.description} Mitigation: ${r.mitigation}.`)
+          .join('\n')}`
+    )
+    .join('\n\n');
+
+  const gateLines = ex.gates
+    .map(
+      (g) =>
+        `### ${g.name}\n\n- Mandated by: ${g.mandatedBy} — ${g.mandatedByDetail}\n- Applies: ${g.applies}${g.appliesIf ? ` (if ${g.appliesIf})` : ''}\n- Evidence required:\n${g.evidenceRequired.map((e) => `  - ${e}`).join('\n')}\n- Blocks phases: ${g.blockingPhases.join(', ') || '—'}`
+    )
+    .join('\n\n');
+
+  const integrationLines = ex.integrations
+    .map(
+      (i) =>
+        `- **${i.name}** (${i.vendor}, ${i.category}, popularity: ${i.popularity}) — ${i.purpose} | env: \`${i.envVar}\` | mocked-by-default: ${i.mockedByDefault} | failure modes: ${i.failureModes.join('; ')}`
+    )
+    .join('\n');
+
+  return `# NON_FUNCTIONAL_REQUIREMENTS
+
+> Generated from research extractions. Every risk and gate traces to cited primary sources.
+
+## Risks
+
+${riskLines}
+
+## Hard gates the industry expects
+
+${gateLines}
+
+## Integrations
+
+${integrationLines || '- None researched.'}
+`;
+}
+
 function buildNonFunctionalRequirements(input: ProjectInput, context: ProjectContext) {
+  if (context.extractions) {
+    return buildNonFunctionalRequirementsFromResearch(input, context.extractions);
+  }
   return `# NON_FUNCTIONAL_REQUIREMENTS
 
 ## Performance expectations
@@ -9276,10 +9395,13 @@ ${phase.failureConditions.map((item) => `- ${item}`).join('\n')}
   return files;
 }
 
-export function generateProjectBundle(input: ProjectInput): ProjectBundle {
+export function generateProjectBundle(
+  input: ProjectInput,
+  options: { extractions?: ResearchExtractions } = {}
+): ProjectBundle {
   const profile = getProfileConfig(input);
   const questionnaire = buildQuestionnaire(input);
-  const context = buildContext(input);
+  const context = buildContext(input, options.extractions);
   const critique = buildCritique(input, questionnaire, context);
   const phases = buildPhasePlan(input, context, critique);
   const baseScore = scoreProject(input, questionnaire, critique);
