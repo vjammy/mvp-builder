@@ -357,7 +357,3 @@ The regression suite is a reusable, project-specific asset designed to be run re
 - `docs/`: beginner guides and workflow explanations
 - `scripts/`: CLI commands like `create-project`, `validate`, `status`, and `next-phase`
 - `lib/`: generator and workflow logic
-
-## License
-
-MIT

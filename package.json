@@ -1,7 +1,6 @@
 {
   "name": "manoa-method",
   "version": "1.0.0",
-  "license": "MIT",
   "description": "A local, markdown-first planning and gating system for AI-assisted builds in Codex, Claude Code, and OpenCode",
   "scripts": {
     "dev": "next dev",
