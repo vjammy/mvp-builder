@@ -1,6 +1,6 @@
 # Product Spec
 
-Manoa Method is the markdown-first planning, gating, scoring, and handoff layer before AI coding starts.
+MVP Builder is the markdown-first planning, gating, scoring, and handoff layer before AI coding starts.
 
 ## V1 scope
 

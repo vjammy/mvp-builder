@@ -1,8 +1,8 @@
-# Manoa Methodology
+# MVP Builderology
 
-## What Manoa Method Is
+## What MVP Builder Is
 
-Manoa Method is a markdown-first project planning and execution discipline for AI-assisted builds.
+MVP Builder is a markdown-first project planning and execution discipline for AI-assisted builds.
 
 It is designed for situations where a team has:
 
@@ -23,7 +23,7 @@ The goal is not just to generate documentation. The goal is to create a build sy
 
 ## The Core Promise
 
-Manoa Method tries to make every important question explicit before or during the build:
+MVP Builder tries to make every important question explicit before or during the build:
 
 - What are we trying to build?
 - Who is it for?
@@ -102,7 +102,7 @@ Each file has a job:
 
 ## The Gate Model
 
-Manoa Method treats advancement as something that must be earned, not assumed.
+MVP Builder treats advancement as something that must be earned, not assumed.
 
 At the phase level:
 
@@ -126,7 +126,7 @@ This is important because many projects fail not from one large mistake, but fro
 
 Evidence is central to the method.
 
-In Manoa Method, a claim like "the phase passed" is not enough. The method expects concrete proof such as:
+In MVP Builder, a claim like "the phase passed" is not enough. The method expects concrete proof such as:
 
 - changed files
 - test output
@@ -177,11 +177,11 @@ Most AI-assisted projects break in one or more of these ways:
 - phases are marked done without proof
 - the next builder cannot tell what actually happened
 
-Manoa Method exists to make those failure modes visible early, not after a broken handoff.
+MVP Builder exists to make those failure modes visible early, not after a broken handoff.
 
-## What Manoa Method Is Not
+## What MVP Builder Is Not
 
-Manoa Method is not:
+MVP Builder is not:
 
 - a hosted product platform
 - a replacement for product judgment

@@ -14,7 +14,7 @@
 
 ## Files changed
 - `lib/generator.ts`
-- `scripts/manoa-validate.ts`
+- `scripts/mvp-builder-validate.ts`
 - `scripts/smoke-test.ts`
 - `scripts/test-quality-regression.ts`
 

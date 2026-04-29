@@ -1,10 +1,10 @@
-# Manoa Method
+# MVP Builder
 
-Manoa Method is a local, markdown-first planning system for AI-assisted builds in Codex, Claude Code, and OpenCode.
+MVP Builder is a local, markdown-first planning system for AI-assisted builds in Codex, Claude Code, and OpenCode.
 
 It helps you turn a rough idea into a reusable workspace of markdown files before and during coding. That workspace explains the project, breaks the work into phases, records gates, tracks evidence, and preserves context so you can resume later or switch agents without losing your place.
 
-Manoa Method is not a hosted app, project manager, or quality guarantee. It gives you structure, but you still need human review and good judgment.
+MVP Builder is not a hosted app, project manager, or quality guarantee. It gives you structure, but you still need human review and good judgment.
 
 ## Documentation Map
 
@@ -17,9 +17,9 @@ If you want the full documentation set, start here:
 - Technical builder workflow: [docs/TECHNICAL_BUILDER_WORKFLOW.md](docs/TECHNICAL_BUILDER_WORKFLOW.md)
 - Build from attached requirements: [docs/BUILD_FROM_REQUIREMENTS.md](docs/BUILD_FROM_REQUIREMENTS.md)
 
-## What Manoa Method Tries To Do
+## What MVP Builder Tries To Do
 
-Manoa Method tries to solve a specific problem:
+MVP Builder tries to solve a specific problem:
 
 - teams want to use AI coding tools
 - requirements are often incomplete or trapped in chat
@@ -39,7 +39,7 @@ The method addresses that by turning requirements into a local, phase-based work
 
 ## The Method In One Page
 
-At a high level, Manoa Method works like this:
+At a high level, MVP Builder works like this:
 
 1. Capture the project brief and mode.
 2. Force business and technical questions into the open.
@@ -75,11 +75,11 @@ If you already have a requirements document and want an AI agent to build from i
 The short version is:
 
 - give the agent the requirements, wherever they live
-- tell it to pull `https://github.com/vjammy/manoa-method`
+- tell it to pull `https://github.com/vjammy/mvp-builder`
 - tell it that it is expected to build the real solution
 - tell it to build in the repo root
-- require it to use Manoa Method to turn those requirements into a robust production-ready application
-- require it to follow the Manoa phase, gate, validation, and handoff workflow
+- require it to use MVP Builder to turn those requirements into a robust production-ready application
+- require it to follow the MVP Builder phase, gate, validation, and handoff workflow
 
 ## Audience-Specific Guides
 
@@ -88,9 +88,9 @@ The short version is:
 - Beginner guide: [docs/NOVICE_GUIDE.md](docs/NOVICE_GUIDE.md)
 - Quick commands: [docs/QUICKSTART.md](docs/QUICKSTART.md)
 
-## Manoa Orchestrator
+## MVP Builder Orchestrator
 
-The repo now includes Manoa Orchestrator, a local-first orchestrator that can read a generated workspace or repo, derive objective criteria, generate focused prompt packets, run local commands, enforce gates, score the build from 0 to 100, and write recovery plans when something fails.
+The repo now includes MVP Builder Orchestrator, a local-first orchestrator that can read a generated workspace or repo, derive objective criteria, generate focused prompt packets, run local commands, enforce gates, score the build from 0 to 100, and write recovery plans when something fails.
 
 What it does not do:
 
@@ -114,7 +114,7 @@ Reports are written to `orchestrator/reports/` and run artifacts to `orchestrato
 
 ## Production Build Mode
 
-Manoa Method now includes a reusable production-build prompt and production-release document set so teams can distinguish:
+MVP Builder now includes a reusable production-build prompt and production-release document set so teams can distinguish:
 
 - planning package only
 - runnable MVP
@@ -122,7 +122,7 @@ Manoa Method now includes a reusable production-build prompt and production-rele
 
 Use the reusable production prompt here:
 
-- [docs/MANOA_PRODUCTION_BUILD_PROMPT.md](docs/MANOA_PRODUCTION_BUILD_PROMPT.md)
+- [docs/MVP_BUILDER_PRODUCTION_BUILD_PROMPT.md](docs/MVP_BUILDER_PRODUCTION_BUILD_PROMPT.md)
 
 Generated workspaces now also include production-oriented files such as:
 
@@ -141,9 +141,9 @@ Generated workspaces now also include production-oriented files such as:
 
 These files are intended to prevent a runnable MVP from being mistaken for a complete end-to-end production build.
 
-## What Is Manoa Method?
+## What Is MVP Builder?
 
-Use Manoa Method when you want to:
+Use MVP Builder when you want to:
 
 - plan a project before asking an AI coding agent to build it
 - keep build context in local markdown instead of hidden chat history
@@ -163,7 +163,7 @@ Many teams start coding too early. They lose time because:
 - important assumptions live only in chat
 - nobody can tell whether a phase is really complete
 
-Manoa Method solves this by generating a local workspace with:
+MVP Builder solves this by generating a local workspace with:
 
 - project context
 - rules
@@ -176,7 +176,7 @@ Manoa Method solves this by generating a local workspace with:
 
 ## What It Does Not Do
 
-Manoa Method does not:
+MVP Builder does not:
 
 - host your product
 - create a SaaS workflow
@@ -216,7 +216,7 @@ npm run create-project -- --input=examples/family-task-app.json --out=.tmp-famil
 
 What you should see:
 
-- a created folder at `.tmp-family-task-app/manoa-method-workspace`
+- a created folder at `.tmp-family-task-app/mvp-builder-workspace`
 - a zip file beside it
 - command output telling you where the workspace was created
 
@@ -301,7 +301,7 @@ Important verification rules:
 Run:
 
 ```bash
-npm run validate -- --package=.tmp-family-task-app/manoa-method-workspace
+npm run validate -- --package=.tmp-family-task-app/mvp-builder-workspace
 ```
 
 What you should see:
@@ -325,7 +325,7 @@ Validation tells you whether the package structure is healthy. It does not autom
 Run:
 
 ```bash
-npm run status -- --package=.tmp-family-task-app/manoa-method-workspace
+npm run status -- --package=.tmp-family-task-app/mvp-builder-workspace
 ```
 
 What you should see:
@@ -351,13 +351,13 @@ Advance only after:
 Command:
 
 ```bash
-npm run next-phase -- --package=.tmp-family-task-app/manoa-method-workspace --evidence=phases/phase-01/VERIFICATION_REPORT.md
+npm run next-phase -- --package=.tmp-family-task-app/mvp-builder-workspace --evidence=phases/phase-01/VERIFICATION_REPORT.md
 ```
 
 You can also add a handoff note:
 
 ```bash
-npm run next-phase -- --package=.tmp-family-task-app/manoa-method-workspace --evidence=phases/phase-01/VERIFICATION_REPORT.md --handoff="Phase 1 reviewed and approved."
+npm run next-phase -- --package=.tmp-family-task-app/mvp-builder-workspace --evidence=phases/phase-01/VERIFICATION_REPORT.md --handoff="Phase 1 reviewed and approved."
 ```
 
 ## Repeat
@@ -397,7 +397,7 @@ Every generated workspace includes beginner guidance, phase files, a testing lay
 - `TESTING_STRATEGY.md`
 - `REGRESSION_TEST_PLAN.md`
 - `TEST_SCRIPT_INDEX.md`
-- `repo/manoa-state.json`
+- `repo/mvp-builder-state.json`
 
 ### Per-phase files (inside each `phases/phase-XX/` folder)
 - `PHASE_BRIEF.md`

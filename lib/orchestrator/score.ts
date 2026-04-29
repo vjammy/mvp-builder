@@ -132,7 +132,9 @@ export function buildScorecard(
     { reason: 'If generated artifacts are mostly generic templates', maxScore: 74, triggered: hardCapSignals.mostlyGeneric },
     { reason: 'If phase gates are bypassed', maxScore: 69, triggered: hardCapSignals.bypassedGates },
     { reason: 'If fake evidence is present', maxScore: 49, triggered: hardCapSignals.fakeEvidence },
-    { reason: 'If repo cannot build at all', maxScore: 60, triggered: hardCapSignals.repoCannotBuildAtAll }
+    { reason: 'If repo cannot build at all', maxScore: 60, triggered: hardCapSignals.repoCannotBuildAtAll },
+    { reason: 'If a phase has more than 3 rework attempts', maxScore: 79, triggered: Boolean(hardCapSignals.excessiveRework) },
+    { reason: 'If requirement bodies are duplicated boilerplate', maxScore: 74, triggered: Boolean(hardCapSignals.duplicateRequirementBodies) }
   ];
 
   const activeCaps = hardCaps.filter((cap) => cap.triggered);

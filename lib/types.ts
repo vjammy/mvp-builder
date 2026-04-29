@@ -3,7 +3,7 @@ export type UserTrack = 'business' | 'technical';
 export type ProfileKey = `${ExperienceLevel}-${UserTrack}`;
 export type CritiqueSeverity = 'critical' | 'important' | 'nice-to-have';
 export type WarningSeverity = 'info' | 'warning' | 'blocker';
-export type LifecycleStatus = 'Draft' | 'Blocked' | 'ReviewReady' | 'ApprovedForBuild';
+export type LifecycleStatus = 'Draft' | 'Blocked' | 'ReviewReady' | 'ApprovedForBuild' | 'InRework';
 
 export type ProjectInput = {
   productName: string;
@@ -23,6 +23,17 @@ export type ProjectInput = {
   timeline: string;
   teamContext: string;
   questionnaireAnswers: Record<string, string>;
+  runtimeUrl?: string;
+  runtimeStartCommand?: string;
+  runtimeSmokeRoutes?: string[];
+  runtimeStartTimeoutMs?: number;
+};
+
+export type RuntimeTarget = {
+  url: string;
+  startCommand: string;
+  smokeRoutes: string[];
+  startTimeoutMs: number;
 };
 
 export type GeneratedFile = {
@@ -30,7 +41,7 @@ export type GeneratedFile = {
   content: string;
 };
 
-export type ManoaState = {
+export type MvpBuilderState = {
   currentPhase: number;
   lifecycleStatus: LifecycleStatus;
   completedPhases: string[];
@@ -54,8 +65,18 @@ export type ManoaState = {
       reviewerRecommendation: string;
       evidenceFiles: string[];
       manualApproval?: boolean;
+      attempts?: PhaseAttempt[];
     }
   >;
+};
+
+export type PhaseAttempt = {
+  attempt: number;
+  startedAt: string;
+  resolvedAt?: string;
+  status: 'pass' | 'fail' | 'pending';
+  failedCriteria: string[];
+  reworkPromptPath?: string;
 };
 
 export type QuestionnaireItem = {
@@ -119,6 +140,7 @@ export type PhasePlan = {
   repoTargets: string[];
   implementationPromptPlaceholder: string;
   reviewPromptPlaceholder: string;
+  requirementIds?: string[];
 };
 
 export type ScoreCategory = {

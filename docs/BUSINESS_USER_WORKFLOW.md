@@ -2,7 +2,7 @@
 
 ## Who This Is For
 
-This guide is for founders, operators, product owners, and business-side collaborators who want to use Manoa Method without living inside the technical folders.
+This guide is for founders, operators, product owners, and business-side collaborators who want to use MVP Builder without living inside the technical folders.
 
 ## The Main Idea
 
@@ -94,7 +94,7 @@ At this stage, you are checking:
 - whether screenshots exist for UI work
 - whether the recommendation is honestly earned
 
-This is where many projects get sloppy. Manoa Method is intentionally strict here.
+This is where many projects get sloppy. MVP Builder is intentionally strict here.
 
 ### 6. Handoff
 
@@ -137,7 +137,7 @@ The easiest pattern is:
 
 ## What Success Looks Like
 
-A strong Manoa workflow for a business user looks like this:
+A strong MVP Builder workflow for a business user looks like this:
 
 - the project is understandable in plain English
 - the MVP is protected

@@ -1,6 +1,6 @@
 # 10-Use-Case Benchmark
 
-This benchmark is the pinned set of product ideas the Manoa Autoresearch Program runs against on every evaluation cycle. The set is intentionally fixed so changes in score over time reflect real generator changes, not benchmark drift.
+This benchmark is the pinned set of product ideas the MVP Builder Autoresearch Program runs against on every evaluation cycle. The set is intentionally fixed so changes in score over time reflect real generator changes, not benchmark drift.
 
 The exact inputs live in `scripts/test-quality-regression.ts` under `USE_CASES`. This document explains why each use case is in the set and what regressions it is expected to catch.
 

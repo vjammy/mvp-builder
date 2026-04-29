@@ -1,6 +1,6 @@
-# Autoresearch (Manoa Method self-evaluation)
+# Autoresearch (MVP Builder self-evaluation)
 
-This folder is the Manoa Method's self-evaluation harness. It is **not** for external research.
+This folder is the MVP Builder's self-evaluation harness. It is **not** for external research.
 
 It exists so the generator can keep proving, run after run, that:
 
@@ -26,7 +26,7 @@ The default target is **lowest use-case score >= 95** with all commands passing.
 
 ## Files in this folder
 
-- [MANOA_AUTORESEARCH_PROGRAM.md](MANOA_AUTORESEARCH_PROGRAM.md) — full program description.
+- [MVP_BUILDER_AUTORESEARCH_PROGRAM.md](MVP_BUILDER_AUTORESEARCH_PROGRAM.md) — full program description.
 - [benchmarks/10-use-case-benchmark.md](benchmarks/10-use-case-benchmark.md) — the ten pinned product use cases.
 - [rubrics/quality-score-rubric.md](rubrics/quality-score-rubric.md) — the 100-point rubric.
 - [rubrics/hard-caps.md](rubrics/hard-caps.md) — failure-mode score caps.
@@ -37,7 +37,7 @@ The default target is **lowest use-case score >= 95** with all commands passing.
 ## When to run
 
 - Before merging a generator change.
-- Before cutting a release of the Manoa Method repo.
+- Before cutting a release of the MVP Builder repo.
 - After dependency updates that can change generated output.
 - On a schedule, to catch silent drift.
 

@@ -23,7 +23,7 @@ function runScript(repoRoot: string, script: string) {
     shell: process.platform === 'win32',
     env: {
       ...process.env,
-      MANOA_REPORT_ROOT: path.join(path.dirname(commandsRootForScript(repoRoot, script)), 'nested-orchestrator')
+      MVP_BUILDER_REPORT_ROOT: path.join(path.dirname(commandsRootForScript(repoRoot, script)), 'nested-orchestrator')
     }
   });
   return {

@@ -1,6 +1,6 @@
-# Manoa Orchestrator
+# MVP Builder Orchestrator
 
-Manoa Orchestrator is the local-first run loop for generated Manoa workspaces and repos.
+MVP Builder Orchestrator is the local-first run loop for generated MVP Builder workspaces and repos.
 
 It reads the repo and package docs, derives objective criteria, writes prompt packets for focused agents, runs local commands, enforces entry/build/evidence/exit gates, scores the result from 0 to 100, and writes recovery plans when a gate fails.
 
@@ -33,10 +33,10 @@ Because tests and build are intentionally skipped in dry-run mode, the score is 
 You can also use the thin subcommand wrapper:
 
 ```bash
-npm run manoa -- orchestrate
-npm run manoa -- score
-npm run manoa -- gates
-npm run manoa -- recover
+npm run mvp-builder -- orchestrate
+npm run mvp-builder -- score
+npm run mvp-builder -- gates
+npm run mvp-builder -- recover
 ```
 
 ## Reports

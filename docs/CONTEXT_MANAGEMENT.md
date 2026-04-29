@@ -1,6 +1,6 @@
 # CONTEXT_MANAGEMENT
 
-Manoa Method is designed around small, explicit context packets rather than long, growing chat sessions across Codex, Claude Code, and OpenCode.
+MVP Builder is designed around small, explicit context packets rather than long, growing chat sessions across Codex, Claude Code, and OpenCode.
 
 ## Root context files
 
@@ -11,7 +11,7 @@ Manoa Method is designed around small, explicit context packets rather than long
 - `PROJECT_BRIEF.md`
 - `PHASE_PLAN.md`
 - `repo/manifest.json`
-- `repo/manoa-state.json`
+- `repo/mvp-builder-state.json`
 
 ## Phase context packet
 

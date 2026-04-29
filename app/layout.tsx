@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Manoa Method',
+  title: 'MVP Builder',
   description: 'Markdown-first planning, gating, scoring, and handoff before coding starts.'
 };
 

@@ -1,3 +1,3 @@
 # handoff-writer
 
-Review the Manoa artifacts from this perspective and identify blockers before coding starts.
+Review the MVP Builder artifacts from this perspective and identify blockers before coding starts.

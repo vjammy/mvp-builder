@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * One-shot lifecycle finalization for the Manoa Method's own production-mode build.
+ * One-shot lifecycle finalization for the MVP Builder's own production-mode build.
  *
  * Reads the current workspace state at the repo root, fills in honest evidence
  * for every phase pointing at real source files in the repo, and writes the
@@ -41,18 +41,18 @@ type PhaseEvidence = {
 const phaseEvidence: PhaseEvidence[] = [
   {
     slug: 'phase-01',
-    goal: 'Project brief and planning guardrails for Manoa Method',
-    filesChanged: ['PROJECT_BRIEF.md', 'examples/manoa-method-itself.json', 'repo/manifest.json'],
+    goal: 'Project brief and planning guardrails for MVP Builder',
+    filesChanged: ['PROJECT_BRIEF.md', 'examples/mvp-builder-itself.json', 'repo/manifest.json'],
     commandsRun: ['npm run create-project', 'npm run validate'],
     evidenceFiles: [
       'PROJECT_BRIEF.md',
-      'examples/manoa-method-itself.json',
+      'examples/mvp-builder-itself.json',
       'phases/phase-01/HANDOFF_SUMMARY.md',
       'phases/phase-01/EVIDENCE_CHECKLIST.md',
       'phases/phase-01/NEXT_PHASE_CONTEXT.md'
     ],
     summary: [
-      'Locked the Manoa Method product brief, audience, problem statement, and constraints in PROJECT_BRIEF.md and the matching JSON input at examples/manoa-method-itself.json.',
+      'Locked the MVP Builder product brief, audience, problem statement, and constraints in PROJECT_BRIEF.md and the matching JSON input at examples/mvp-builder-itself.json.',
       'Confirmed local-first / markdown-first guardrails: no hosted backend, no auth, no database, no external SaaS dependency. All artifacts readable as plain markdown.',
       'Resolved planning blockers: critical answers for north-star, primary-workflow, scope-cut, acceptance, operating-risks, data-boundaries, failure-modes, observability, and scaling-risk are all filled in.'
     ]
@@ -70,7 +70,7 @@ const phaseEvidence: PhaseEvidence[] = [
       'phases/phase-02/NEXT_PHASE_CONTEXT.md'
     ],
     summary: [
-      'Captured product north star: prove a complete Manoa Method lifecycle on the Manoa Method repo itself with real evidence and scoring.',
+      'Captured product north star: prove a complete MVP Builder lifecycle on the MVP Builder repo itself with real evidence and scoring.',
       'Identified primary audience (technical product owners, AI-assisted builders) and secondary reviewers; differences encoded in BUSINESS_USER_START_HERE.md and CODEX/CLAUDE/OPENCODE start guides.',
       'Documented explicit non-goals: no hosted SaaS, no auth, no database, no paid APIs, no fake agent execution. Out-of-scope list lives in product-strategy/OUT_OF_SCOPE.md.'
     ]
@@ -107,7 +107,7 @@ const phaseEvidence: PhaseEvidence[] = [
     ],
     summary: [
       'Architecture stays local-first: a Next.js app under app/, a CLI of TypeScript scripts under scripts/, and library modules under lib/ for generation and orchestration.',
-      'Data model is markdown + JSON only: workspace markdown files, repo/manifest.json, repo/manoa-state.json, autoresearch/results.tsv, command outputs in markdown under orchestrator/runs.',
+      'Data model is markdown + JSON only: workspace markdown files, repo/manifest.json, repo/mvp-builder-state.json, autoresearch/results.tsv, command outputs in markdown under orchestrator/runs.',
       'Confirmed by `npm run typecheck` (exit 0) and `npm run build` (Next.js production build, exit 0). Build output recorded in evidence/commands/build.log.'
     ]
   },
@@ -131,33 +131,33 @@ const phaseEvidence: PhaseEvidence[] = [
   {
     slug: 'phase-06',
     goal: 'Implementation gate: generator, validator, status, next-phase commands',
-    filesChanged: ['lib/generator.ts', 'lib/templates.ts', 'lib/workflow.ts', 'scripts/manoa-create-project.ts', 'scripts/manoa-validate.ts', 'scripts/manoa-status.ts', 'scripts/manoa-next-phase.ts'],
+    filesChanged: ['lib/generator.ts', 'lib/templates.ts', 'lib/workflow.ts', 'scripts/mvp-builder-create-project.ts', 'scripts/mvp-builder-validate.ts', 'scripts/mvp-builder-status.ts', 'scripts/mvp-builder-next-phase.ts'],
     commandsRun: ['npm run typecheck', 'npm run build', 'npm run smoke'],
     evidenceFiles: [
       'lib/generator.ts',
-      'scripts/manoa-validate.ts',
-      'scripts/manoa-status.ts',
-      'scripts/manoa-next-phase.ts',
+      'scripts/mvp-builder-validate.ts',
+      'scripts/mvp-builder-status.ts',
+      'scripts/mvp-builder-next-phase.ts',
       'evidence/commands/typecheck.log',
       'phases/phase-06/HANDOFF_SUMMARY.md'
     ],
     summary: [
       'Generator emits >350 markdown files for a single workspace including phases, gates, ui-ux, recursive-test, regression-suite, and production-mode docs.',
-      'CLI scripts manoa-create-project, manoa-validate, manoa-status, manoa-next-phase all exist and run via tsx with no transpile step.',
+      'CLI scripts mvp-builder-create-project, mvp-builder-validate, mvp-builder-status, mvp-builder-next-phase all exist and run via tsx with no transpile step.',
       'Implementation passes typecheck (tsc --noEmit, exit 0) and Next.js build (exit 0). See evidence/commands/typecheck.log and evidence/commands/build.log.'
     ]
   },
   {
     slug: 'phase-07',
     goal: 'Orchestrator, scoring, gates, and recovery commands',
-    filesChanged: ['lib/orchestrator/runner.ts', 'lib/orchestrator/gates.ts', 'lib/orchestrator/score.ts', 'lib/orchestrator/recovery.ts', 'scripts/manoa-orchestrate.ts', 'scripts/manoa-score.ts', 'scripts/manoa-gates.ts', 'scripts/manoa-recover.ts'],
+    filesChanged: ['lib/orchestrator/runner.ts', 'lib/orchestrator/gates.ts', 'lib/orchestrator/score.ts', 'lib/orchestrator/recovery.ts', 'scripts/mvp-builder-orchestrate.ts', 'scripts/mvp-builder-score.ts', 'scripts/mvp-builder-gates.ts', 'scripts/mvp-builder-recover.ts'],
     commandsRun: ['npm run score', 'npm run gates'],
     evidenceFiles: [
       'lib/orchestrator/gates.ts',
       'lib/orchestrator/score.ts',
       'lib/orchestrator/recovery.ts',
-      'scripts/manoa-gates.ts',
-      'scripts/manoa-recover.ts',
+      'scripts/mvp-builder-gates.ts',
+      'scripts/mvp-builder-recover.ts',
       'phases/phase-07/HANDOFF_SUMMARY.md'
     ],
     summary: [
@@ -187,16 +187,16 @@ const phaseEvidence: PhaseEvidence[] = [
   {
     slug: 'phase-09',
     goal: 'Autoresearch program and ten-use-case benchmark',
-    filesChanged: ['scripts/manoa-autoresearch.ts', 'autoresearch/MANOA_AUTORESEARCH_PROGRAM.md', 'autoresearch/benchmarks/10-use-case-benchmark.md', 'autoresearch/rubrics/quality-score-rubric.md', 'autoresearch/rubrics/hard-caps.md', 'autoresearch/rubrics/simplicity-criteria.md'],
+    filesChanged: ['scripts/mvp-builder-autoresearch.ts', 'autoresearch/MVP_BUILDER_AUTORESEARCH_PROGRAM.md', 'autoresearch/benchmarks/10-use-case-benchmark.md', 'autoresearch/rubrics/quality-score-rubric.md', 'autoresearch/rubrics/hard-caps.md', 'autoresearch/rubrics/simplicity-criteria.md'],
     commandsRun: ['npm run autoresearch'],
     evidenceFiles: [
-      'autoresearch/MANOA_AUTORESEARCH_PROGRAM.md',
+      'autoresearch/MVP_BUILDER_AUTORESEARCH_PROGRAM.md',
       'autoresearch/README.md',
       'autoresearch/benchmarks/10-use-case-benchmark.md',
       'autoresearch/rubrics/quality-score-rubric.md',
       'autoresearch/rubrics/hard-caps.md',
       'autoresearch/rubrics/simplicity-criteria.md',
-      'scripts/manoa-autoresearch.ts'
+      'scripts/mvp-builder-autoresearch.ts'
     ],
     summary: [
       'Autoresearch program is a self-evaluation harness over ten pinned product domains spanning consumer family, service operations, community, and B2B use cases.',
@@ -213,7 +213,7 @@ const phaseEvidence: PhaseEvidence[] = [
       'docs/USING_WITH_CODEX.md',
       'docs/USING_WITH_CLAUDE_CODE.md',
       'docs/USING_WITH_OPENCODE.md',
-      'docs/MANOA_PRODUCTION_BUILD_PROMPT.md',
+      'docs/MVP_BUILDER_PRODUCTION_BUILD_PROMPT.md',
       'phases/phase-10/HANDOFF_SUMMARY.md'
     ],
     summary: [
@@ -246,7 +246,7 @@ const phaseEvidence: PhaseEvidence[] = [
   {
     slug: 'phase-12',
     goal: 'Lifecycle execution: validate, status, next-phase, score, gates',
-    filesChanged: ['repo/manoa-state.json', 'phases/phase-01/VERIFICATION_REPORT.md', 'orchestrator/reports/OBJECTIVE_SCORECARD.md', 'orchestrator/reports/GATE_RESULTS.md'],
+    filesChanged: ['repo/mvp-builder-state.json', 'phases/phase-01/VERIFICATION_REPORT.md', 'orchestrator/reports/OBJECTIVE_SCORECARD.md', 'orchestrator/reports/GATE_RESULTS.md'],
     commandsRun: ['npm run validate', 'npm run status', 'npm run score', 'npm run gates'],
     evidenceFiles: [
       'CURRENT_STATUS.md',
@@ -257,7 +257,7 @@ const phaseEvidence: PhaseEvidence[] = [
     ],
     summary: [
       'Lifecycle progressed honestly through all 13 phases: each phase has a verification report with pass + proceed plus listed evidence files that exist on disk.',
-      'manoa-state.json reflects completed phases, currentPhase advances on real evidence, and lifecycleStatus is ApprovedForBuild only after every gate passes.',
+      'mvp-builder-state.json reflects completed phases, currentPhase advances on real evidence, and lifecycleStatus is ApprovedForBuild only after every gate passes.',
       'Score, gates, status, and validate commands all run cleanly against the repo and write reports under orchestrator/reports.'
     ]
   },
@@ -279,7 +279,7 @@ const phaseEvidence: PhaseEvidence[] = [
     summary: [
       'All required commands run: typecheck (PASS), build (PASS), smoke (PASS), test:quality-regression (PASS), score (recorded), gates (recorded), validate (PASS), status (PASS).',
       'All eight gates pass on real evidence: entry, implementation, test, regression, evidence, security, release, exit.',
-      'Final reports are filled in with project-specific content; manifest, manoa-state, CURRENT_STATUS, and FINAL_HANDOFF agree on the same lifecycle state.'
+      'Final reports are filled in with project-specific content; manifest, mvp-builder-state, CURRENT_STATUS, and FINAL_HANDOFF agree on the same lifecycle state.'
     ]
   }
 ];
@@ -371,7 +371,7 @@ ${phase.filesChanged.map((file) => `- ${file}`).join('\n')}
 
 ## Manual checks
 - [x] FINAL_RELEASE_REPORT does not contradict this phase's verification report.
-- [x] manoa-state.json marks this phase as approvedToProceed.
+- [x] mvp-builder-state.json marks this phase as approvedToProceed.
 `;
 }
 
@@ -427,7 +427,7 @@ A short final recap for any reviewer picking up the closed lifecycle.
 ${inheritBullets.map((line) => `- ${line}`).join('\n')}
 
 ## Final package summary
-- All 13 phases progressed with real evidence; manoa-state.json marks every phase approvedToProceed.
+- All 13 phases progressed with real evidence; mvp-builder-state.json marks every phase approvedToProceed.
 - FINAL_RELEASE_REPORT.md, FINAL_HANDOFF.md, FINAL_GATE_REPORT.md, FINAL_SCORECARD.md, FINAL_RECOVERY_SUMMARY.md, and FINAL_DEPLOYMENT_STATUS.md are filled with project-specific content.
 - Eight gates passed on the baseline scan; orchestrator/reports/ contains the captured reports.
 
@@ -481,7 +481,7 @@ function fillPhases() {
 }
 
 function updateState() {
-  const statePath = 'repo/manoa-state.json';
+  const statePath = 'repo/mvp-builder-state.json';
   const state = JSON.parse(read(statePath));
   state.lifecycleStatus = 'ApprovedForBuild';
   state.currentPhase = phaseEvidence.length;
@@ -489,7 +489,7 @@ function updateState() {
   state.blockedPhases = [];
   state.unresolvedBlockers = [];
   state.lastHandoffSummary =
-    'Production-mode lifecycle for Manoa Method itself completed. All 13 phases verified with real evidence; eight gates pass; autoresearch infrastructure docs added; FINAL_* reports filled with non-template content.';
+    'Production-mode lifecycle for MVP Builder itself completed. All 13 phases verified with real evidence; eight gates pass; autoresearch infrastructure docs added; FINAL_* reports filled with non-template content.';
   for (const phase of phaseEvidence) {
     if (!state.phaseEvidence[phase.slug]) state.phaseEvidence[phase.slug] = {};
     state.phaseEvidence[phase.slug] = {
@@ -513,10 +513,10 @@ function buildFinalReports() {
     `# FINAL_RELEASE_REPORT
 
 ## Release summary
-- Release target: Manoa Method v1.0 production-mode build of the Manoa Method repo itself.
+- Release target: MVP Builder v1.0 production-mode build of the MVP Builder repo itself.
 - Scope delivered: workspace generator, validate / status / next-phase CLI, orchestrator (score, gates, recover), autoresearch over the ten-use-case benchmark, regression suite, recursive testing layer, agent-specific prompts for Codex / Claude Code / OpenCode, and the full production-mode document set.
-- Final lifecycle state: ApprovedForBuild. All 13 phases completed with real evidence. manoa-state.json, manifest.json, CURRENT_STATUS.md, and this report agree on the same state.
-- Final recommendation: PASS for the local-first scope of Manoa Method. Production deployment to a hosted runtime is intentionally out of scope (see PRODUCTION_SCOPE.md).
+- Final lifecycle state: ApprovedForBuild. All 13 phases completed with real evidence. mvp-builder-state.json, manifest.json, CURRENT_STATUS.md, and this report agree on the same state.
+- Final recommendation: PASS for the local-first scope of MVP Builder. Production deployment to a hosted runtime is intentionally out of scope (see PRODUCTION_SCOPE.md).
 
 ## What was fully built
 - Next.js 14 app under app/ for browsing the generator output (npm run dev / build).
@@ -541,10 +541,10 @@ function buildFinalReports() {
 - phase-13 Final release handoff and production gate — pass + proceed
 
 ## Final lifecycle state
-- repo/manoa-state.json lifecycleStatus: ApprovedForBuild
+- repo/mvp-builder-state.json lifecycleStatus: ApprovedForBuild
 - repo/manifest.json lifecycleStatus: ApprovedForBuild and approvedForBuild: true
 - CURRENT_STATUS.md current stage: handoff complete
-- repo/manoa-state.json currentPhase: 13 (final phase)
+- repo/mvp-builder-state.json currentPhase: 13 (final phase)
 - All 13 phases approvedToProceed: true
 
 ## Gates passed or failed
@@ -573,7 +573,7 @@ function buildFinalReports() {
 - Orchestrator regression checks (inside the smoke test) verify all eight gates pass on the baseline repo scan and that hard caps fire on known failure modes.
 
 ## Deployment / readiness summary
-- Local-first: the Manoa Method runs from the repo with Node 20+ and tsx. No deployment to a hosted environment is part of v1.
+- Local-first: the MVP Builder runs from the repo with Node 20+ and tsx. No deployment to a hosted environment is part of v1.
 - ENVIRONMENT_SETUP.md documents the supported Node version and operating systems.
 - DEPLOYMENT_PLAN.md describes how a downstream consumer would package the CLI and the Next.js UI; this is documentation, not a hosted release.
 - ROLLBACK_PLAN.md and INCIDENT_RESPONSE_GUIDE.md cover how to recover from a corrupted local workspace.
@@ -581,13 +581,13 @@ function buildFinalReports() {
 ## Remaining risks
 - Generator drift: regressions are caught by autoresearch over the ten-use-case benchmark and by the smoke test cross-domain rules.
 - Score gaming: hard caps in lib/orchestrator/score.ts and autoresearch/rubrics/hard-caps.md prevent a high raw score from masking known failure modes.
-- Operator misuse: a builder can still bypass next-phase by hand-editing manoa-state.json. The exit gate inspects bypass and triggers the 69-point cap when detected.
+- Operator misuse: a builder can still bypass next-phase by hand-editing mvp-builder-state.json. The exit gate inspects bypass and triggers the 69-point cap when detected.
 
 ## Exact blockers if not production-ready
 - None for the agreed local-first scope. If a future change adds a hosted runtime, that scope expansion would re-open the security review, deployment plan, and incident response sections.
 
 ## Final recommendation
-PASS for local-first production scope. The Manoa Method is ready to be used to plan and gate other AI-assisted builds, including itself.
+PASS for local-first production scope. The MVP Builder is ready to be used to plan and gate other AI-assisted builds, including itself.
 `
   );
 
@@ -596,19 +596,19 @@ PASS for local-first production scope. The Manoa Method is ready to be used to p
     `# FINAL_HANDOFF
 
 ## What was just completed
-- Full production-mode lifecycle on the Manoa Method repo itself, treating the repo as the application.
+- Full production-mode lifecycle on the MVP Builder repo itself, treating the repo as the application.
 - 13 phases progressed honestly with real evidence files. Eight gates pass on the baseline repo scan.
 - Autoresearch infrastructure documents created under autoresearch/ (program, README, benchmark, three rubrics, results.tsv).
 - All FINAL_* reports filled with project-specific content (no pending-only template shells).
-- repo/manifest.json and repo/manoa-state.json updated to ApprovedForBuild.
+- repo/manifest.json and repo/mvp-builder-state.json updated to ApprovedForBuild.
 
 ## What the next builder should read first
-1. README.md — the Manoa Method README.
+1. README.md — the MVP Builder README.
 2. FINAL_RELEASE_REPORT.md — the release summary, what was built, and what is deferred.
 3. CURRENT_STATUS.md — current stage and next action.
 4. orchestrator/reports/OBJECTIVE_SCORECARD.md — the score breakdown.
 5. orchestrator/reports/GATE_RESULTS.md — gate pass/fail with detail.
-6. autoresearch/MANOA_AUTORESEARCH_PROGRAM.md — how to keep evaluating.
+6. autoresearch/MVP_BUILDER_AUTORESEARCH_PROGRAM.md — how to keep evaluating.
 
 ## What is safe to run
 - npm run typecheck
@@ -622,25 +622,25 @@ PASS for local-first production scope. The Manoa Method is ready to be used to p
 - npm run autoresearch (writes to autoresearch/reports/<runId>.md and appends one row to autoresearch/results.tsv)
 
 ## What is intentionally out of scope
-- Hosted deployment of the Manoa Method (no SaaS, no auth, no database).
+- Hosted deployment of the MVP Builder (no SaaS, no auth, no database).
 - Calls to external APIs at runtime.
 - Mobile-native UI.
-- Automatic agent execution. The Manoa Method generates packages; humans or AI agents run them.
+- Automatic agent execution. The MVP Builder generates packages; humans or AI agents run them.
 
 ## How to extend safely
 - New use case in the autoresearch benchmark: update USE_CASES in scripts/test-quality-regression.ts and update autoresearch/benchmarks/10-use-case-benchmark.md in the same commit.
 - New rubric category: edit lib/orchestrator/score.ts and autoresearch/rubrics/quality-score-rubric.md together.
-- New hard cap: edit scoreUseCase in scripts/manoa-autoresearch.ts and document it in autoresearch/rubrics/hard-caps.md.
+- New hard cap: edit scoreUseCase in scripts/mvp-builder-autoresearch.ts and document it in autoresearch/rubrics/hard-caps.md.
 - Generator change: re-run npm run autoresearch and confirm no use case regresses below target before merging.
 
 ## What might surprise the next builder
-- The repo root itself acts as a generated Manoa workspace because the production-mode build was run on Manoa Method itself. Files like phases/, gates/, ui-ux/ at the root are gitignored and locally-generated.
+- The repo root itself acts as a generated MVP Builder workspace because the production-mode build was run on MVP Builder itself. Files like phases/, gates/, ui-ux/ at the root are gitignored and locally-generated.
 - regression-suite/scripts/run-regression.ts at the repo root is a tracked file (committed) and is a project-specific version, not the generic generator template.
-- The Manoa Method repo contains a custom example input examples/manoa-method-itself.json used to drive this production-mode build.
+- The MVP Builder repo contains a custom example input examples/mvp-builder-itself.json used to drive this production-mode build.
 
 ## Production caveats
 - All claims in FINAL_RELEASE_REPORT.md are local-first. Real-world hosted deployment would require a separate scope review.
-- Operator can still bypass next-phase by editing manoa-state.json by hand; the exit gate detects the bypass and caps the score, but does not prevent the edit.
+- Operator can still bypass next-phase by editing mvp-builder-state.json by hand; the exit gate detects the bypass and caps the score, but does not prevent the edit.
 `
   );
 
@@ -690,9 +690,9 @@ None triggered on the final scan.
 - The orchestrator regression checks inside smoke confirm the eight gates stay healthy on the baseline scan.
 
 ## What would lower the score
-- Removing autoresearch/MANOA_AUTORESEARCH_PROGRAM.md or any rubric file: would re-trigger smoke failure and re-cap the score.
+- Removing autoresearch/MVP_BUILDER_AUTORESEARCH_PROGRAM.md or any rubric file: would re-trigger smoke failure and re-cap the score.
 - Reverting any FINAL_* report to a pending-only template: release gate fails and capped score drops.
-- Bypassing next-phase by editing manoa-state.json directly: exit gate fires and caps the score at 69.
+- Bypassing next-phase by editing mvp-builder-state.json directly: exit gate fires and caps the score at 69.
 
 ## What we deliberately did not do
 - We did not weaken the rubric or hard caps to make any score look better.
@@ -706,8 +706,8 @@ None triggered on the final scan.
     `# FINAL_RECOVERY_SUMMARY
 
 ## Issues encountered during this build and how they were resolved
-- Missing autoresearch infrastructure files: autoresearch/MANOA_AUTORESEARCH_PROGRAM.md, autoresearch/README.md, autoresearch/results.tsv, autoresearch/benchmarks/10-use-case-benchmark.md, autoresearch/rubrics/{quality-score-rubric.md, hard-caps.md, simplicity-criteria.md} were referenced by scripts/smoke-test.ts but did not exist on disk. Resolution: authored each file as canonical infrastructure documentation matching the rubric and benchmark already encoded in scripts/manoa-autoresearch.ts.
-- Smoke test orchestrator regression check failed because release gate required production docs at the repo root, manifest with approvedForBuild=true, and non-template FINAL_* reports. Resolution: ran npm run create-project against examples/manoa-method-itself.json to generate the canonical workspace, copied workspace artifacts to the repo root excluding the existing README.md and the project-specific regression-suite/scripts/run-regression.ts, then filled FINAL_* reports with real content.
+- Missing autoresearch infrastructure files: autoresearch/MVP_BUILDER_AUTORESEARCH_PROGRAM.md, autoresearch/README.md, autoresearch/results.tsv, autoresearch/benchmarks/10-use-case-benchmark.md, autoresearch/rubrics/{quality-score-rubric.md, hard-caps.md, simplicity-criteria.md} were referenced by scripts/smoke-test.ts but did not exist on disk. Resolution: authored each file as canonical infrastructure documentation matching the rubric and benchmark already encoded in scripts/mvp-builder-autoresearch.ts.
+- Smoke test orchestrator regression check failed because release gate required production docs at the repo root, manifest with approvedForBuild=true, and non-template FINAL_* reports. Resolution: ran npm run create-project against examples/mvp-builder-itself.json to generate the canonical workspace, copied workspace artifacts to the repo root excluding the existing README.md and the project-specific regression-suite/scripts/run-regression.ts, then filled FINAL_* reports with real content.
 - Workspace generated with lifecycleStatus=Blocked because two questionnaire answers (acceptance, operating-risks) were missing and the problem statement lacked consequence words. Resolution: rewrote the problem statement to include causes/costs/blocks/slows tied to concrete pain, added acceptance and operating-risks answers, regenerated. Final manifest now has lifecycleStatus=ApprovedForBuild and readinessScore=97.
 - VERIFICATION_REPORT.md files for all 13 phases initially listed only "- pending" under ## evidence files. Resolution: scripts/finalize-lifecycle.ts fills each phase's VERIFICATION_REPORT.md, EVIDENCE_CHECKLIST.md, HANDOFF_SUMMARY.md completion update, NEXT_PHASE_CONTEXT.md, and TEST_RESULTS.md with real, project-specific evidence pointing at files that exist on disk.
 
@@ -729,7 +729,7 @@ None triggered on the final scan.
     `# FINAL_DEPLOYMENT_STATUS
 
 ## Deployment posture
-- Target environment: local-first. Manoa Method ships as a Node.js + Next.js source repository. The "deployment" is a successful local install plus a production build.
+- Target environment: local-first. MVP Builder ships as a Node.js + Next.js source repository. The "deployment" is a successful local install plus a production build.
 - Hosted deployment: not in scope for v1. There is no managed runtime, no SaaS endpoint, and no inbound traffic.
 - Distribution: end users clone or fork the repo, run \`npm install\`, and run the commands listed in README.md.
 
@@ -761,7 +761,7 @@ None triggered on the final scan.
 - See PERFORMANCE_PLAN.md for run-time expectations on a typical laptop.
 
 ## Final recommendation
-DEPLOY-LOCAL: Manoa Method v1 is ready for local-first use. Hosted deployment is not part of this release.
+DEPLOY-LOCAL: MVP Builder v1 is ready for local-first use. Hosted deployment is not part of this release.
 `
   );
 
@@ -785,7 +785,7 @@ release gate: pass. Exit gate: pass. All eight gates pass on the baseline repo s
 2. FINAL_HANDOFF.md
 3. orchestrator/reports/OBJECTIVE_SCORECARD.md
 4. orchestrator/reports/GATE_RESULTS.md
-5. autoresearch/MANOA_AUTORESEARCH_PROGRAM.md
+5. autoresearch/MVP_BUILDER_AUTORESEARCH_PROGRAM.md
 `
   );
 
@@ -823,7 +823,7 @@ release gate: pass. Exit gate: pass. All eight gates pass on the baseline repo s
     `# FINAL_ORCHESTRATOR_REPORT
 
 ## Run summary
-- Mode: production-mode build of the Manoa Method repo against itself.
+- Mode: production-mode build of the MVP Builder repo against itself.
 - Gates run: entry, implementation, test, regression, evidence, security, release, exit.
 - Result: all eight gates pass on the baseline repo scan.
 

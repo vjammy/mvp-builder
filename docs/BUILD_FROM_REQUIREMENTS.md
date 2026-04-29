@@ -2,11 +2,11 @@
 
 ## Purpose
 
-This guide explains how to use Manoa Method when you already have requirements and want a coding agent to build the actual solution from them.
+This guide explains how to use MVP Builder when you already have requirements and want a coding agent to build the actual solution from them.
 
 This is the workflow behind prompts like:
 
-"Requirements attached. Pull repo https://github.com/vjammy/manoa-method and use the Manoa Method workflow to build the production-ready application in the repo root."
+"Requirements attached. Pull repo https://github.com/vjammy/mvp-builder and use the MVP Builder workflow to build the production-ready application in the repo root."
 
 The important clarification is this:
 
@@ -14,7 +14,7 @@ The important clarification is this:
 - the agent is not just generating planning notes
 - the agent is building the real application
 
-Manoa Method is the workflow used to take the project from raw requirements to a robust production-ready end state.
+MVP Builder is the workflow used to take the project from raw requirements to a robust production-ready end state.
 
 ## Where The Requirements May Live
 
@@ -46,7 +46,7 @@ The clearer the input, the stronger the build.
 
 The agent should:
 
-- pull `https://github.com/vjammy/manoa-method`
+- pull `https://github.com/vjammy/mvp-builder`
 - locate the requirements wherever they were provided
 - treat those requirements as the source of truth for the solution
 - read the repo guidance
@@ -97,19 +97,19 @@ The product requirements are either:
 Your first job is to find and read those requirements.
 
 Repository:
-https://github.com/vjammy/manoa-method
+https://github.com/vjammy/mvp-builder
 
 Goal:
 Build a robust production-ready application in the repo root based on those requirements.
 
 Method:
-Use the Manoa Method workflow in this repository to get from requirements to the finished application. Use the method as the delivery system for the build, not as a separate documentation exercise.
+Use the MVP Builder workflow in this repository to get from requirements to the finished application. Use the method as the delivery system for the build, not as a separate documentation exercise.
 
 Instructions:
 1. Locate and read the requirements wherever they were provided.
 2. Treat those requirements as the source of truth for what must be built.
 3. Read the repo start files and current-status guidance first.
-4. Use the Manoa Method to clarify scope, plan phases, enforce gates, verify progress, and maintain handoff quality.
+4. Use the MVP Builder to clarify scope, plan phases, enforce gates, verify progress, and maintain handoff quality.
 5. Build the actual application directly in the repo root.
 6. Work phase by phase. Do not skip entry gates, exit gates, validation, testing, regression checks, or handoff updates.
 7. Keep the markdown workflow files updated as you go so project state stays explicit and reusable.
@@ -133,9 +133,9 @@ You are building the actual solution.
 
 The requirements are either attached here, written in this prompt, or stored somewhere in the repository.
 
-Pull repo: https://github.com/vjammy/manoa-method
+Pull repo: https://github.com/vjammy/mvp-builder
 
-Find the requirements first, then use the Manoa Method workflow in the repo to build a production-ready application in the repo root. Follow the phase workflow, do not skip gates, and keep the markdown files updated so the handoff is clear.
+Find the requirements first, then use the MVP Builder workflow in the repo to build a production-ready application in the repo root. Follow the phase workflow, do not skip gates, and keep the markdown files updated so the handoff is clear.
 ```
 
 ## Why This Prompt Shape Works Better
@@ -146,7 +146,7 @@ This wording is stronger because it makes five things explicit:
 2. the agent must first locate the requirements
 3. the requirements may live in several places
 4. the desired outcome is a production-ready application
-5. Manoa Method is the workflow for reaching that end state
+5. MVP Builder is the workflow for reaching that end state
 
 ## What The Agent Should Read First
 

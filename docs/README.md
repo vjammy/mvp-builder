@@ -1,6 +1,6 @@
 # Documentation Guide
 
-This folder explains Manoa Method from three angles:
+This folder explains MVP Builder from three angles:
 
 - what the method is
 - why the method uses gates, evidence, and handoffs

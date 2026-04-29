@@ -1,6 +1,6 @@
 # Quality Score Rubric (per-use-case, 100 points)
 
-This rubric defines how each use case in the autoresearch benchmark is scored from 0 to 100. The implementation lives in `scripts/manoa-autoresearch.ts` (`scoreUseCase`).
+This rubric defines how each use case in the autoresearch benchmark is scored from 0 to 100. The implementation lives in `scripts/mvp-builder-autoresearch.ts` (`scoreUseCase`).
 
 The rubric is deliberately additive across eight categories so a high score requires breadth, not just one strong area.
 

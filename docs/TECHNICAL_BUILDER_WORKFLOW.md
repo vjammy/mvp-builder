@@ -2,7 +2,7 @@
 
 ## Who This Is For
 
-This guide is for engineers, technical PMs, and AI-assisted builders working directly in the repo or in a generated Manoa workspace.
+This guide is for engineers, technical PMs, and AI-assisted builders working directly in the repo or in a generated MVP Builder workspace.
 
 ## The Main Rule
 
@@ -88,7 +88,7 @@ Bad evidence:
 
 The repo expects consistency across:
 
-- `repo/manoa-state.json`
+- `repo/mvp-builder-state.json`
 - `repo/manifest.json`
 - current status and final reports
 
@@ -122,19 +122,19 @@ npm run create-project -- --input=examples/family-task-app.json --out=.tmp-famil
 Inspect package status:
 
 ```bash
-npm run status -- --package=.tmp-family-task-app/manoa-method-workspace
+npm run status -- --package=.tmp-family-task-app/mvp-builder-workspace
 ```
 
 Validate package integrity:
 
 ```bash
-npm run validate -- --package=.tmp-family-task-app/manoa-method-workspace
+npm run validate -- --package=.tmp-family-task-app/mvp-builder-workspace
 ```
 
 Advance a phase after verification:
 
 ```bash
-npm run next-phase -- --package=.tmp-family-task-app/manoa-method-workspace --evidence=phases/phase-01/VERIFICATION_REPORT.md
+npm run next-phase -- --package=.tmp-family-task-app/mvp-builder-workspace --evidence=phases/phase-01/VERIFICATION_REPORT.md
 ```
 
 Run orchestrator checks:

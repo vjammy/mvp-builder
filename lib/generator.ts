@@ -21,7 +21,7 @@ import type {
   QuestionnaireItem,
   WarningItem,
   WarningSeverity,
-  ManoaState
+  MvpBuilderState
 } from './types';
 
 type PhaseBlueprint = {
@@ -88,7 +88,7 @@ type ProjectContext = {
 };
 
 type AgentName = 'Codex' | 'Claude Code' | 'OpenCode';
-const DEFAULT_EXPORT_ROOT = 'manoa-method-workspace';
+const DEFAULT_EXPORT_ROOT = 'mvp-builder-workspace';
 
 function ensureTrailingNewline(value: string) {
   return `${value.trim()}\n`;
@@ -2192,7 +2192,7 @@ function buildStateManagement(input: ProjectInput, context: ProjectContext) {
 - Local markdown and JSON records that keep ${context.ontology.workflowTypes[0]?.name || 'the workflow'} resumable.
 
 ## Persisted state
-- ${entities.map((entity) => entity.name).join(', ')} records plus repo/manoa-state.json and evidence files.
+- ${entities.map((entity) => entity.name).join(', ')} records plus repo/mvp-builder-state.json and evidence files.
 
 ## Loading/error states
 - Pending verification, blocked phase, missing evidence, failed validation, revise-needed states, and domain-specific workflow blockers must stay visible.
@@ -2552,6 +2552,8 @@ function getLifecycleSummary(status: LifecycleStatus) {
       return 'The package is complete enough for formal human review, but it is not yet explicitly approved for build execution.';
     case 'Blocked':
       return 'The package is blocked by unresolved blocker warnings, missing critical answers, or failed readiness conditions.';
+    case 'InRework':
+      return 'A previously approved phase has been reopened. The current phase has a recorded gate failure and an active REWORK_PROMPT that must be resolved before advancing.';
     default:
       return 'The package is still in draft form. It can be exported for review, but it should not be treated as build-approved.';
   }
@@ -3581,7 +3583,7 @@ Use this file when you want ${agentName} to work on this phase.
 - phases/${phase.slug}/HANDOFF_SUMMARY.md
 - phases/${phase.slug}/NEXT_PHASE_CONTEXT.md
 - repo/manifest.json
-- repo/manoa-state.json
+- repo/mvp-builder-state.json
 ${agentName === 'OpenCode' ? `- OPENCODE_START_HERE.md
 - phases/${phase.slug}/OPENCODE_BUILD_PROMPT.md
 ` : ''}
@@ -3708,7 +3710,7 @@ ${renderSupportModuleLines(supportModules, 'No extra support folder is required 
 - phases/${phase.slug}/HANDOFF_SUMMARY.md
 - phases/${phase.slug}/NEXT_PHASE_CONTEXT.md
 - repo/manifest.json
-- repo/manoa-state.json
+- repo/mvp-builder-state.json
 
 ## Files to give OpenCode specifically
 - 00_PROJECT_CONTEXT.md
@@ -3776,7 +3778,7 @@ ${phase.entryCriteria.map((item) => `- ${item}`).join('\n')}
 
 ## What to do if the gate fails
 - Stop implementation for this phase.
-- Record the blocker in repo/manoa-state.json so the package still shows the truth.
+- Record the blocker in repo/mvp-builder-state.json so the package still shows the truth.
 - Update phases/${phase.slug}/HANDOFF_SUMMARY.md with what is missing.
 - Do not move to the next phase yet.
 `;
@@ -4018,7 +4020,7 @@ function buildVerifyPrompt(
     `phases/${phase.slug}/VERIFICATION_REPORT.md`,
     `phases/${phase.slug}/EVIDENCE_CHECKLIST.md`,
     `repo/manifest.json`,
-    `repo/manoa-state.json`
+    `repo/mvp-builder-state.json`
   ].join('\n- ');
 
   return `# VERIFY_PROMPT for ${phase.name}
@@ -4132,7 +4134,7 @@ Selected recommendation: pending
 - phases/${phase.slug}/HANDOFF_SUMMARY.md
 - phases/${phase.slug}/EVIDENCE_CHECKLIST.md
 - repo/manifest.json
-- repo/manoa-state.json
+- repo/mvp-builder-state.json
 ${supportModules.map((module) => `- ${module.folder}`).join('\n')}
 
 ## files changed
@@ -4282,7 +4284,7 @@ ${
 2. ${usageFile}
 3. 00_APPROVAL_GATE.md
 4. repo/manifest.json
-5. repo/manoa-state.json
+5. repo/mvp-builder-state.json
 ${agentName === 'OpenCode' ? `6. AGENTS.md
 ` : ''}
 
@@ -4318,7 +4320,7 @@ function buildPackageStartHere(bundle: ProjectBundle, input: ProjectInput) {
   return `# START_HERE
 
 ## What this package is
-This is a local, markdown-first Manoa Method workspace. It helps you plan, verify, hand off, and resume work without depending on hidden chat history.
+This is a local, markdown-first MVP Builder workspace. It helps you plan, verify, hand off, and resume work without depending on hidden chat history.
 
 ## Important beginner note
 You do not need to open every folder. Start with these three files and the current phase only.
@@ -4389,7 +4391,7 @@ ${moduleEntries
 QUICKSTART.md includes the same commands in one place.
 
 ## Resume and handoff
-- Yes, you can resume later. repo/manoa-state.json records the current phase and evidence details.
+- Yes, you can resume later. repo/mvp-builder-state.json records the current phase and evidence details.
 - Yes, you can hand off between Codex, Claude Code, and OpenCode. Use the same markdown files as the source of truth and start with the matching *_START_HERE.md file.
 
 ## Files for you vs files for the AI agent
@@ -4405,7 +4407,7 @@ function buildRootReadme(bundle: ProjectBundle, input: ProjectInput) {
   return `# ${input.productName}
 
 ## What this package is
-This is a local Manoa Method workspace. It is a markdown package that helps you plan the work, check each phase, record evidence, and hand the project between Codex, Claude Code, and OpenCode without relying on hidden chat history.
+This is a local MVP Builder workspace. It is a markdown package that helps you plan the work, check each phase, record evidence, and hand the project between Codex, Claude Code, and OpenCode without relying on hidden chat history.
 
 ## Business-user shortcut
 - Open BUSINESS_USER_START_HERE.md first.
@@ -4463,7 +4465,7 @@ function buildOrchestratorGuide(bundle: ProjectBundle, input: ProjectInput) {
   return `# ORCHESTRATOR_GUIDE
 
 ## What this does
-The Manoa Orchestrator is the local run loop that reads this workspace, checks phase evidence, runs local commands, writes prompt packets for focused agents, scores the repo from 0 to 100, and writes recovery guidance when a gate fails.
+The MVP Builder Orchestrator is the local run loop that reads this workspace, checks phase evidence, runs local commands, writes prompt packets for focused agents, scores the repo from 0 to 100, and writes recovery guidance when a gate fails.
 
 ## What this does not do
 - It does not call hosted agent APIs in v1.
@@ -4660,7 +4662,7 @@ Novice users often assume they need to open everything. You do not.
 - The deeper Decide and Plan support folders unless the guide or prompt tells you to use them
 - Deep regression-suite scripts until you are testing
 - Agent-specific prompt files until you are about to paste one into an AI tool
-- repo/manifest.json and repo/manoa-state.json unless someone asks for technical debugging
+- repo/manifest.json and repo/mvp-builder-state.json unless someone asks for technical debugging
 ${context.uiRelevant ? '- Screen and Workflow Review details that are not needed for the current build step once the current UI question is answered' : '- The full Screen and Workflow Review folder unless a real interface appears'}
 - The Improve Until Good Enough Loop until a major build milestone is complete
 
@@ -5999,7 +6001,7 @@ Recursive testing is a quality-improvement loop, not a one-time test command. Th
 - This folder
 - The generated project artifacts
 - Any attached use-case or swarm test-case file
-- The regression suite and test scripts already generated by Manoa
+- The regression suite and test scripts already generated by MVP Builder
 
 ## Default target score
 - 90/100
@@ -6022,12 +6024,12 @@ function buildRecursivePrompt() {
   return `# RECURSIVE_TEST_PROMPT
 
 \`\`\`text
-You are running Manoa Method recursive testing.
+You are running MVP Builder recursive testing.
 
 Required behavior:
 1. Inspect the repository.
 2. Read available test cases.
-3. If manoa_kimi_1050_swarm_test_cases.md exists, use it.
+3. If mvp_builder_kimi_1050_swarm_test_cases.md exists, use it.
 4. If no test case file exists, create a smaller but rigorous test suite from the generated project artifacts.
 5. Test all 10 use cases if available.
 6. Generate outputs for each use case.
@@ -6465,11 +6467,11 @@ Paste this into ${agentName} with the listed files attached or opened.
 - phases/${firstPhase.slug}/${buildPromptFile}
 - phases/${firstPhase.slug}/TEST_PLAN.md
 - repo/manifest.json
-- repo/manoa-state.json
+- repo/mvp-builder-state.json
 
 ## Prompt
 \`\`\`text
-You are starting work on ${input.productName} using the Manoa Method package.
+You are starting work on ${input.productName} using the MVP Builder package.
 
 Treat the provided markdown files as the full source of truth. Do not rely on hidden chat context. Work only on the current phase, confirm the gate before coding, and stop if the package says the phase is blocked.
 
@@ -6487,11 +6489,11 @@ ${firstPhase.phaseType === 'implementation'
 5. Complete only the current phase implementation work.
 6. Run or describe the required tests.
 7. If this is a major build milestone, recommend whether recursive testing should run next.
-8. Return a short handoff summary and suggested text for repo/manoa-state.json updates.`
+8. Return a short handoff summary and suggested text for repo/mvp-builder-state.json updates.`
     : `4. Produce the planning outputs, decisions, open questions, and evidence notes required for this phase.
 5. Do not invent implementation file changes unless the phase packet names them. If likely repo areas matter, label them as assumptions.
 6. Run or describe the required inspection or review checks.
-7. Return a short handoff summary and suggested text for repo/manoa-state.json updates.`}
+7. Return a short handoff summary and suggested text for repo/mvp-builder-state.json updates.`}
 \`\`\`
 `;
 }
@@ -6591,7 +6593,7 @@ Use this file if you want a short workflow for ${agentName}.
 - Keep the context packet small.
 - Do not include unrelated earlier phase files unless the current phase explicitly depends on them.
 - Use /recursive-test/ only after a major build milestone. It is a quality-improvement loop, not a substitute for normal verification.
-- After the phase completes, update repo/manoa-state.json and the phase handoff summary.
+- After the phase completes, update repo/mvp-builder-state.json and the phase handoff summary.
 `;
 }
 
@@ -6600,7 +6602,7 @@ function buildAgentsMd() {
 
 ${CORE_AGENT_OPERATING_RULES}
 
-## Manoa Method agent rules
+## MVP Builder agent rules
 - Work one phase at a time.
 - Read the current phase packet before editing anything.
 - Do not skip entry gates.
@@ -6617,7 +6619,7 @@ ${CORE_AGENT_OPERATING_RULES}
 `;
 }
 
-function buildManoaState(bundle: ProjectBundle): ManoaState {
+function buildMvpBuilderState(bundle: ProjectBundle): MvpBuilderState {
   const phaseEvidence = Object.fromEntries(
     bundle.phases.map((phase) => [
       phase.slug,
@@ -6699,6 +6701,16 @@ Check: ${c}
 Pass criteria: The criterion is demonstrably met with evidence.
 Fail criteria: The criterion is not met or has no supporting evidence.
 Where to record: phases/${phase.slug}/VERIFICATION_REPORT.md`).join('\n\n')}
+
+## Executable verification
+The MVP Builder loop runner extracts shell commands from the fenced bash block below and runs each one in the package root. Add safe, deterministic commands that prove this phase works. The runner skips destructive commands automatically.
+
+\`\`\`bash
+npm run typecheck
+npm run validate -- --package=.
+\`\`\`
+
+If this phase produces or depends on a running application, also append \`npm run probe -- --package=.\` to the block above so the loop has runtime evidence.
 
 ## Pass/fail criteria
 - PASS: All commands or manual procedures succeed, all manual checks pass, and exit gate criteria are met with evidence.
@@ -7006,7 +7018,7 @@ function buildBuildTarget(input: ProjectInput, context: ProjectContext) {
 ## Current default target
 Review and confirm the build target before implementation starts.
 
-- Planning package only: generate the Manoa workspace and keep implementation deferred.
+- Planning package only: generate the MVP Builder workspace and keep implementation deferred.
 - Runnable MVP: build the smallest honest local-first application that proves the core workflow.
 - Production application: complete the full implementation lifecycle, release documentation, operational handoff, and final state progression.
 
@@ -7058,7 +7070,7 @@ ${listToBullets(context.nonGoals, 'No additional out-of-scope items are recorded
 
 ## Production-specific completion checks
 - The application must be fully implemented for the approved scope.
-- The Manoa lifecycle must be advanced phase by phase instead of staying in an early planning phase.
+- The MVP Builder lifecycle must be advanced phase by phase instead of staying in an early planning phase.
 - The release gate must pass with real evidence.
 - Final reports, scorecards, and state files must agree.
 
@@ -7797,7 +7809,7 @@ ${phaseFiles.map((f) => `- [ ] ${f}`).join('\n')}
 
 ### Step 5: Check repo files
 - [ ] repo/manifest.json exists.
-- [ ] repo/manoa-state.json exists.
+- [ ] repo/mvp-builder-state.json exists.
 - [ ] repo/input.json exists.
 
 ## Pass criteria
@@ -7835,7 +7847,7 @@ Confirm that entry gates, exit gates, scorecard, verification reports, and test 
 - All phase VERIFICATION_REPORT.md files.
 - All phase TEST_RESULTS.md files.
 - SCORECARD.md.
-- repo/manifest.json and repo/manoa-state.json.
+- repo/manifest.json and repo/mvp-builder-state.json.
 
 ## Step-by-step checks
 
@@ -8309,6 +8321,136 @@ Stop immediately if the planning workflow itself requires a hosted service. Prod
 `;
 }
 
+function resolveRuntimeTarget(input: ProjectInput): { url: string; startCommand: string; smokeRoutes: string[]; startTimeoutMs: number } {
+  const url = (input.runtimeUrl && input.runtimeUrl.trim()) || 'http://localhost:3000';
+  const startCommand = (input.runtimeStartCommand && input.runtimeStartCommand.trim()) || 'npm run dev';
+  const smokeRoutes = (input.runtimeSmokeRoutes && input.runtimeSmokeRoutes.length ? input.runtimeSmokeRoutes : ['/']).filter(
+    (route) => typeof route === 'string' && route.trim().length > 0
+  );
+  const startTimeoutMs =
+    typeof input.runtimeStartTimeoutMs === 'number' && input.runtimeStartTimeoutMs > 0
+      ? input.runtimeStartTimeoutMs
+      : 60000;
+  return { url, startCommand, smokeRoutes, startTimeoutMs };
+}
+
+function buildRuntimeTarget(input: ProjectInput, context: ProjectContext) {
+  const target = resolveRuntimeTarget(input);
+  const port = (() => {
+    try {
+      const parsed = new URL(target.url);
+      return parsed.port || (parsed.protocol === 'https:' ? '443' : '80');
+    } catch {
+      return 'unknown';
+    }
+  })();
+  return `# RUNTIME_TARGET
+
+## What this file is for
+This file declares where the application runs once started. It is the contract used by:
+
+- a user who wants to test the running app immediately
+- the mvp-builder probe script that captures HTTP evidence
+- the mvp-builder convergence loop that scores outcomes
+- any agent (Codex, Claude Code, OpenCode, or one with chrome-devtools / Playwright tools) that needs to verify the running application
+
+If this file is wrong, every outcome-based check downstream is wrong. Keep it accurate.
+
+## URL
+- Base URL: ${target.url}
+- Port: ${port}
+
+## Start command
+- Command: ${target.startCommand}
+- Working directory: the package or repo root that owns the application
+- Expected startup time: under ${Math.round(target.startTimeoutMs / 1000)} seconds before the URL responds
+
+## Smoke routes
+A successful runtime probe must receive a 2xx or 3xx response from each of these routes within the start timeout:
+
+${target.smokeRoutes.map((route) => `- ${route}`).join('\n')}
+
+## How a user can test it manually
+1. Open a terminal in the project root.
+2. Run \`${target.startCommand}\`.
+3. Open ${target.url} in a browser.
+4. Confirm the smoke routes load without errors.
+5. Stop the process when done.
+
+## How an automated probe should test it
+1. Spawn the start command as a child process.
+2. Poll the base URL and each smoke route until 2xx/3xx or timeout.
+3. Record HTTP status, response headers, and a body snapshot to evidence/runtime/probe-<timestamp>.md.
+4. Kill the child process before exit.
+5. Write a single pass/fail outcome line that downstream scoring can consume.
+
+## What changes if the application is not a web app
+If ${context.profile.label} produces a CLI, library, or batch process, replace the URL with a structured success signal (a generated file path, a CLI exit code, or a JSON output schema) and document it here. The probe script will skip URL polling when this file says \`Base URL: none\`.
+
+## Owners
+- Update this file whenever the start command or port changes.
+- Keep RUNTIME_TARGET.md in sync with ENVIRONMENT_SETUP.md and BUILD_TARGET.md.
+`;
+}
+
+function buildBrowserAutomationGuide(input: ProjectInput, _context: ProjectContext) {
+  const target = resolveRuntimeTarget(input);
+  return `# BROWSER_AUTOMATION_GUIDE
+
+## What this file is for
+This file tells an AI coding agent how to drive a real browser against the running application during the convergence loop. It exists because keyword-based scoring cannot tell whether the UI works; only running the UI can.
+
+## When to use browser automation
+- Phase has any UI deliverable.
+- A previous probe captured HTTP 200 but the page rendered an error.
+- A regression introduced a visible defect that smoke-test routes did not catch.
+- The acceptance criteria mention a screen, a flow, or a user action.
+
+If the project has no UI, skip this guide.
+
+## Tooling options for the agent
+The agent should pick whichever option is already available in its harness. Both are valid.
+
+### Option A: Chrome DevTools MCP
+- Best for agents that already have an MCP client connected (for example a Claude Code session with the chrome-devtools MCP server installed).
+- The agent calls navigate, fill, click, take_snapshot, and list_console_messages tools directly.
+- Evidence: a snapshot text, console messages, and network requests captured per assertion.
+
+### Option B: Playwright
+- Best for agents that can install dependencies inside the project being built.
+- Add Playwright as a devDependency in the *project*, not in MVP Builder itself.
+- Use the chromium browser by default; install other browsers only if the project explicitly needs them.
+- Evidence: screenshots saved under evidence/runtime/screenshots/ and a single Playwright report per run.
+
+## Mandatory assertion checklist for any UI verification
+Run all of these against ${target.url} and the routes listed in RUNTIME_TARGET.md:
+
+1. The base URL responds with status 200 (or the documented expected status).
+2. The page contains a non-empty title.
+3. No uncaught console errors are present after first paint.
+4. Each documented user action (the must-have features in PROJECT_BRIEF.md) reaches a visible success state.
+5. After every state change, capture either a snapshot or a screenshot as evidence.
+
+## What the agent must NOT do
+- Do not stub the browser layer to fake a pass.
+- Do not skip console-error checks.
+- Do not click through error states without recording them.
+- Do not hardcode a wait-time longer than RUNTIME_TARGET.md startTimeout.
+
+## Where to write evidence
+- \`evidence/runtime/screenshots/<phase>-<timestamp>.png\` for screenshots.
+- \`evidence/runtime/snapshots/<phase>-<timestamp>.txt\` for accessibility/DOM snapshots.
+- \`evidence/runtime/console/<phase>-<timestamp>.log\` for browser console messages.
+- A one-line outcome under the matching \`phases/phase-XX/VERIFICATION_REPORT.md\` evidence files section.
+
+## How this plugs into the convergence loop
+\`npm run loop\` reads the latest probe outcome plus any browser-automation evidence in evidence/runtime/. If the loop finds a UI failure with no browser evidence, it writes a fix prompt that names this guide and asks the agent to run a real browser pass before the next iteration.
+
+## Why two options instead of one
+Forcing Playwright as a hard dependency would bloat MVP Builder itself with browser binaries. Forcing chrome-devtools MCP would exclude agents that do not have it. Documenting both keeps the harness portable, and the assertion checklist above is identical regardless of tooling.
+`;
+}
+
 function buildRunAllScript(bundle: ProjectBundle) {
   return `# run-all
 
@@ -8353,7 +8495,7 @@ function createGeneratedFiles(bundle: ProjectBundle, input: ProjectInput, contex
           : context.profile.key === 'advanced-business'
             ? 'Executive review note: treat unresolved business value, adoption, and operating-model questions as blockers until they are explicit.'
             : 'Review the brief, close the open questions, and then work the package in phase order.';
-  const manoaState = buildManoaState(bundle);
+  const mvpBuilderState = buildMvpBuilderState(bundle);
   const uiWorkflows = getUiWorkflowSet(input, context);
   const uiScreens = getUiScreens(input, context, uiWorkflows);
 
@@ -8366,6 +8508,8 @@ function createGeneratedFiles(bundle: ProjectBundle, input: ProjectInput, contex
   add('FINAL_CHECKLIST.md', buildFinalChecklist(bundle, input, context));
   add('ORCHESTRATOR_GUIDE.md', buildOrchestratorGuide(bundle, input));
   add('BUILD_TARGET.md', buildBuildTarget(input, context));
+  add('RUNTIME_TARGET.md', buildRuntimeTarget(input, context));
+  add('BROWSER_AUTOMATION_GUIDE.md', buildBrowserAutomationGuide(input, context));
   add('PRODUCTION_SCOPE.md', buildProductionScope(input, context));
   add('DEPLOYMENT_PLAN.md', buildDeploymentPlan(input, context));
   add('ENVIRONMENT_SETUP.md', buildEnvironmentSetup(input, context));
@@ -8687,7 +8831,7 @@ ${renderCritiqueMarkdown(bundle.critique)}
     'repo/README.md',
     `# ${input.productName}
 
-Generated by Manoa Method.
+Generated by MVP Builder.
 
 ## Package status
 ${bundle.lifecycleStatus}
@@ -8715,7 +8859,7 @@ ${listToBullets(bundle.unresolvedWarnings.map((warning) => `[${warning.severity}
   );
 
   add('repo/input.json', JSON.stringify(input, null, 2));
-  add('repo/manoa-state.json', JSON.stringify(manoaState, null, 2));
+  add('repo/mvp-builder-state.json', JSON.stringify(mvpBuilderState, null, 2));
 
   add(
     'repo/manifest.json',
@@ -8754,9 +8898,9 @@ ${listToBullets(bundle.unresolvedWarnings.map((warning) => `[${warning.severity}
         approvalRequired: bundle.approvalRequired,
         approvedForBuild: bundle.approvedForBuild,
         unresolvedWarnings: bundle.unresolvedWarnings,
-        currentPhase: manoaState.currentPhase,
-        completedPhases: manoaState.completedPhases,
-        blockedPhases: manoaState.blockedPhases
+        currentPhase: mvpBuilderState.currentPhase,
+        completedPhases: mvpBuilderState.completedPhases,
+        blockedPhases: mvpBuilderState.blockedPhases
       },
       null,
       2

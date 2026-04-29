@@ -1,6 +1,6 @@
 # GLOSSARY
 
-## Manoa Method
+## MVP Builder
 
 A local, markdown-first planning and gating system for AI-assisted builds.
 

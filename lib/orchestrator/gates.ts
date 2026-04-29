@@ -4,7 +4,7 @@ import {
   assessEvidenceFilesForApproval,
   findVerificationBodyContradictions,
   parseVerificationEvidenceFiles
-} from '../../scripts/manoa-package-utils';
+} from '../../scripts/mvp-builder-package-utils';
 import type { CommandResult, GateResult, RepoState, Scorecard } from './types';
 import { readFileSafe } from './utils';
 
@@ -294,7 +294,7 @@ function releaseGate(repoState: RepoState, commands: CommandResult[]): GateResul
         approvedForBuild?: boolean;
       }
     | null;
-  const state = repoState.manoaState as
+  const state = repoState.mvpBuilderState as
     | {
         lifecycleStatus?: string;
         completedPhases?: string[];
@@ -342,7 +342,7 @@ function releaseGate(repoState: RepoState, commands: CommandResult[]): GateResul
 }
 
 function exitGate(repoState: RepoState, scorecard?: Scorecard): GateResult {
-  const state = repoState.manoaState as { currentPhase?: number; completedPhases?: string[]; phaseEvidence?: Record<string, { approvedToProceed?: boolean }> } | null;
+  const state = repoState.mvpBuilderState as { currentPhase?: number; completedPhases?: string[]; phaseEvidence?: Record<string, { approvedToProceed?: boolean }> } | null;
   const currentPhase = typeof state?.currentPhase === 'number' ? state.currentPhase : 1;
   const previousPhaseSlug = `phase-${String(currentPhase - 1).padStart(2, '0')}`;
   const currentPhaseSlug = `phase-${String(currentPhase).padStart(2, '0')}`;
@@ -447,6 +447,8 @@ export function detectHardCapSignals(repoState: RepoState, commands: CommandResu
   const mostlyGeneric = gates.some(
     (gate) => gate.gate === 'exit gate' && gate.failedCriteria.includes('Artifacts are repo-specific, not mostly generic templates')
   );
+  const excessiveRework = detectExcessiveRework(repoState);
+  const duplicateRequirementBodies = detectDuplicateRequirementBodies(repoState);
 
   return {
     testsWereRun,
@@ -455,6 +457,42 @@ export function detectHardCapSignals(repoState: RepoState, commands: CommandResu
     mostlyGeneric,
     bypassedGates,
     fakeEvidence,
-    repoCannotBuildAtAll
+    repoCannotBuildAtAll,
+    excessiveRework,
+    duplicateRequirementBodies
   };
+}
+
+function detectExcessiveRework(repoState: RepoState) {
+  const state = repoState.mvpBuilderState as
+    | { phaseEvidence?: Record<string, { attempts?: Array<{ attempt: number }> }> }
+    | null;
+  if (!state?.phaseEvidence) return false;
+  return Object.values(state.phaseEvidence).some((record) => (record.attempts?.length || 0) > 3);
+}
+
+function detectDuplicateRequirementBodies(repoState: RepoState) {
+  const root = repoState.packageRoot || repoState.repoRoot;
+  const reqPath = path.join(root, 'requirements', 'FUNCTIONAL_REQUIREMENTS.md');
+  if (!fs.existsSync(reqPath)) return false;
+  const content = readFileSafe(reqPath);
+  const sections = Array.from(
+    content.matchAll(/##\s+Requirement\s+\d+:[^\n]+\n([\s\S]*?)(?=\n##\s+Requirement\s+\d+:|$)/g)
+  ).map((match) => normalizeRequirementBody(match[1]));
+  if (sections.length < 4) return false;
+  const counts = new Map<string, number>();
+  for (const body of sections) {
+    counts.set(body, (counts.get(body) || 0) + 1);
+  }
+  const maxDuplicate = Math.max(...counts.values());
+  // Trip the cap when more than 50% of requirement bodies are byte-identical after normalization.
+  return maxDuplicate / sections.length > 0.5;
+}
+
+function normalizeRequirementBody(body: string) {
+  return body
+    .replace(/\b(record-\d+|primary workflow record)\b/gi, '<placeholder>')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
 }

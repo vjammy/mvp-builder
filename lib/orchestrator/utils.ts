@@ -8,8 +8,8 @@ export function ensureDir(dirPath: string) {
 }
 
 export function resolveOrchestratorRoot(repoRoot: string) {
-  return process.env.MANOA_REPORT_ROOT
-    ? path.resolve(process.env.MANOA_REPORT_ROOT)
+  return process.env.MVP_BUILDER_REPORT_ROOT
+    ? path.resolve(process.env.MVP_BUILDER_REPORT_ROOT)
     : path.join(repoRoot, 'orchestrator');
 }
 

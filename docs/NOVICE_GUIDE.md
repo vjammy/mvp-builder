@@ -2,7 +2,7 @@
 
 ## The Simplest Explanation
 
-Manoa Method helps you prepare a project before and during AI-assisted coding.
+MVP Builder helps you prepare a project before and during AI-assisted coding.
 
 It creates a local folder full of markdown files. Those files explain:
 
@@ -33,7 +33,7 @@ You need:
 
 - Node.js and npm installed
 - this repo on your machine
-- a terminal open in `C:\AI\ManoaMethod`
+- a terminal open in `C:\AI\MvpBuilder`
 - a coding agent you want to use: Codex, Claude Code, or OpenCode
 
 Install dependencies:
@@ -57,10 +57,10 @@ What you should see:
 
 ## Folder Structure
 
-When you generate a project, Manoa Method creates a folder like:
+When you generate a project, MVP Builder creates a folder like:
 
 ```text
-manoa-method-workspace/
+mvp-builder-workspace/
   START_HERE.md
   PROJECT_BRIEF.md
   00_PROJECT_CONTEXT.md
@@ -72,7 +72,7 @@ manoa-method-workspace/
   OPENCODE_START_HERE.md
   repo/
     manifest.json
-    manoa-state.json
+    mvp-builder-state.json
   phases/
     phase-01/
     phase-02/
@@ -90,7 +90,7 @@ Open these files first:
 
 ## The Lifecycle Loop
 
-This is the normal Manoa Method loop:
+This is the normal MVP Builder loop:
 
 1. Create a workspace.
 2. Read the root context files.
@@ -115,15 +115,15 @@ npm run create-project -- --input=examples/family-task-app.json --out=.tmp-famil
 
 What you should see:
 
-- a new folder at `.tmp-family-task-app/manoa-method-workspace`
-- a zip file at `.tmp-family-task-app/manoa-method-workspace.zip`
+- a new folder at `.tmp-family-task-app/mvp-builder-workspace`
+- a zip file at `.tmp-family-task-app/mvp-builder-workspace.zip`
 - terminal output saying where the package was created
 
 ### 2. Open the Generated Workspace
 
 Open:
 
-- `.tmp-family-task-app/manoa-method-workspace/START_HERE.md`
+- `.tmp-family-task-app/mvp-builder-workspace/START_HERE.md`
 
 Then read:
 
@@ -137,12 +137,12 @@ Then read:
 
 The workspace tracks the current phase in:
 
-- `repo/manoa-state.json`
+- `repo/mvp-builder-state.json`
 
 You do not need to edit that file by hand unless you are repairing a broken state. Usually you should use:
 
 ```bash
-npm run status -- --package=.tmp-family-task-app/manoa-method-workspace
+npm run status -- --package=.tmp-family-task-app/mvp-builder-workspace
 ```
 
 What you should see:
@@ -216,7 +216,7 @@ You are deciding whether the phase is:
 Run:
 
 ```bash
-npm run validate -- --package=.tmp-family-task-app/manoa-method-workspace
+npm run validate -- --package=.tmp-family-task-app/mvp-builder-workspace
 ```
 
 What you should see:
@@ -229,7 +229,7 @@ What you should see:
 Run:
 
 ```bash
-npm run status -- --package=.tmp-family-task-app/manoa-method-workspace
+npm run status -- --package=.tmp-family-task-app/mvp-builder-workspace
 ```
 
 What you should see:
@@ -253,7 +253,7 @@ Advance only after:
 Command:
 
 ```bash
-npm run next-phase -- --package=.tmp-family-task-app/manoa-method-workspace --evidence=phases/phase-01/VERIFICATION_REPORT.md
+npm run next-phase -- --package=.tmp-family-task-app/mvp-builder-workspace --evidence=phases/phase-01/VERIFICATION_REPORT.md
 ```
 
 ## How To Work With Codex
@@ -372,7 +372,7 @@ Bad evidence examples:
 Use:
 
 ```bash
-npm run next-phase -- --package=.tmp-family-task-app/manoa-method-workspace --evidence=phases/phase-01/VERIFICATION_REPORT.md
+npm run next-phase -- --package=.tmp-family-task-app/mvp-builder-workspace --evidence=phases/phase-01/VERIFICATION_REPORT.md
 ```
 
 If the command fails, read the error closely. Common reasons:
@@ -404,7 +404,7 @@ The local files are your saved memory.
 - Do not use `pass + proceed` without real evidence files.
 - Do not rely on memory or hidden chat context.
 - Do not assume `validate` means the package is ready to advance.
-- Do not treat Manoa Method as a hosted workflow tool.
+- Do not treat MVP Builder as a hosted workflow tool.
 
 ## Beginner Checklist
 

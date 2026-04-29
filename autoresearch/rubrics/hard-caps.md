@@ -1,6 +1,6 @@
 # Hard Caps (failure-mode score caps)
 
-Hard caps stop a package from passing the autoresearch program when it shows a known failure mode, even if its raw rubric score is high. The implementation lives in `scripts/manoa-autoresearch.ts` (`scoreUseCase`).
+Hard caps stop a package from passing the autoresearch program when it shows a known failure mode, even if its raw rubric score is high. The implementation lives in `scripts/mvp-builder-autoresearch.ts` (`scoreUseCase`).
 
 A capped use case is reported with both `Final score` and `Raw score`. The triggered caps are listed by name in the run report so each regression has a clear label.
 
