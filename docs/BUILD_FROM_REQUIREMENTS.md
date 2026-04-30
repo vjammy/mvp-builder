@@ -47,6 +47,20 @@ Requirements docs vary. Map them like this:
 
 If something doesn't map cleanly, stash it in `questionnaireAnswers` under the matching key (`north-star`, `primary-workflow`, `data-boundaries`, etc.). See `lib/templates.ts > buildQuestionPrompts` for the full set of question IDs.
 
+### List-shaped fields
+
+Fields like `mustHaveFeatures`, `niceToHaveFeatures`, `nonGoals`, `risks`, `dataAndIntegrations`, `targetAudience`, and `constraints` are split into items by the generator. Use any of these separators interchangeably:
+
+- newlines
+- semicolons (`;`) — recommended when an item itself contains a comma
+- commas (`,`) — but only outside parentheses or brackets
+
+Example: `Live queue view (ordered list, current/next); Instructor controls (call next, mark done)` parses as two items, not five.
+
+### Domain archetype
+
+The generator runs a keyword-based domain classifier and uses the match to pick actor names, entity names, sample data, and verification phase templates. If your product doesn't cleanly match a built-in archetype (`family-task`, `restaurant-ordering`, `clinic-scheduler`, `school-club`, `inventory`, `volunteer-manager`, `sdr-sales`, `family-readiness`, `budget-planner`, `hoa-maintenance`), pass `--archetype=general` (or set `archetypeOverride: "general"` in the JSON). In `general` mode, actors are extracted from `targetAudience` (including any explicit `roles are: …` clause) and entities from `dataAndIntegrations` and `mustHaveFeatures` rather than from a baked-in template.
+
 ## When the requirements are vague
 
 Ask the user for clarification before generating the workspace. The generator will produce a usable plan even from sparse input, but vague briefs trigger blocker warnings and the package will land in `lifecycleStatus: Blocked`. That's a feature — vague input shouldn't silently produce a confident plan.

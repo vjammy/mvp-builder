@@ -27,6 +27,7 @@ export type ProjectInput = {
   runtimeStartCommand?: string;
   runtimeSmokeRoutes?: string[];
   runtimeStartTimeoutMs?: number;
+  archetypeOverride?: string;
 };
 
 export type RuntimeTarget = {

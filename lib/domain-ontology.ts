@@ -213,10 +213,46 @@ const ACCEPTANCE_PATTERNS: OntologyAcceptancePattern[] = [
 ];
 
 function splitItems(value: string) {
-  return value
-    .split(/\n|,/)
-    .map((item) => item.trim())
-    .filter(Boolean);
+  if (!value) return [];
+  const items: string[] = [];
+  let buf = '';
+  let parenDepth = 0;
+  let bracketDepth = 0;
+  for (const ch of value) {
+    if (ch === '(' || ch === '[') {
+      if (ch === '(') parenDepth++;
+      else bracketDepth++;
+      buf += ch;
+      continue;
+    }
+    if (ch === ')' || ch === ']') {
+      if (ch === ')') parenDepth = Math.max(0, parenDepth - 1);
+      else bracketDepth = Math.max(0, bracketDepth - 1);
+      buf += ch;
+      continue;
+    }
+    const isSeparator =
+      (ch === '\n' || ch === ';' || ch === ',') && parenDepth === 0 && bracketDepth === 0;
+    if (isSeparator) {
+      const trimmed = buf.trim();
+      if (trimmed) items.push(trimmed);
+      buf = '';
+      continue;
+    }
+    buf += ch;
+  }
+  const tail = buf.trim();
+  if (tail) items.push(tail);
+  if (items.length === 1) {
+    const clauses = items[0]
+      .split(/\.\s+/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+    if (clauses.length >= 4 && clauses.every((part) => part.length <= 80)) {
+      return clauses.map((part) => part.replace(/\.$/, '').trim()).filter(Boolean);
+    }
+  }
+  return items;
 }
 
 function normalize(value: string) {
@@ -666,6 +702,229 @@ function buildBlueprint(domainType: DomainArchetype): Blueprint {
   }
 }
 
+// --- Brief-derived blueprint --------------------------------------------------
+// When the archetype is 'general', the static placeholder blueprint above
+// produces "Core Record" and "Primary User" everywhere. Instead we mine the
+// brief for actor and entity nouns so requirements/sample data reflect the
+// actual product. The archetype still controls the workflow *pattern*
+// (record-create / status-transition / etc.); only the nouns come from
+// the brief.
+
+const ACTOR_BLOCKLIST = new Set([
+  'who',
+  'they',
+  'people',
+  'users',
+  'team',
+  'teams',
+  'use',
+  'uses',
+  'using',
+  'this',
+  'that',
+  'app',
+  'product',
+  'service',
+  'system',
+  'tool',
+  'mvp',
+  'mvp builder'
+]);
+
+const ENTITY_HINT_NOUNS = [
+  // Generic data noun hints, ranked roughly by descriptive value.
+  'session',
+  'queue',
+  'queue entry',
+  'entry',
+  'request',
+  'ticket',
+  'order',
+  'item',
+  'task',
+  'event',
+  'shift',
+  'profile',
+  'account',
+  'project',
+  'message',
+  'post',
+  'lead',
+  'record',
+  'invoice',
+  'payment',
+  'subscription',
+  'plan',
+  'meeting',
+  'appointment',
+  'schedule',
+  'reservation',
+  'submission',
+  'application',
+  'document',
+  'file',
+  'note',
+  'review',
+  'comment',
+  'reminder',
+  'summary',
+  'report',
+  'dashboard',
+  'workspace',
+  'organization',
+  'group',
+  'channel',
+  'thread',
+  'conversation',
+  'campaign',
+  'tag',
+  'category',
+  'milestone',
+  'goal',
+  'progress',
+  'log',
+  'transaction',
+  'contact'
+];
+
+function deriveActorsFromAudience(audienceSegments: string[]): OntologyActor[] {
+  const explicit: string[] = []; // from "roles are: …" clauses, preferred
+  const inline: string[] = []; // from raw audience fragments
+  for (const segment of audienceSegments) {
+    const roleClause = segment.match(/roles?\s+are\s*:\s*(.+?)(?:\.|$)/i)?.[1];
+    if (roleClause) {
+      for (const fragment of roleClause.split(/\s+and\s+|,\s*/)) {
+        const cleaned = fragment.replace(/\([^)]*\)/g, '').replace(/[.,;:!?]+$/, '').trim();
+        if (!cleaned) continue;
+        const lower = cleaned.toLowerCase();
+        if (ACTOR_BLOCKLIST.has(lower)) continue;
+        if (cleaned.length < 3 || cleaned.length > 40) continue;
+        explicit.push(titleCase(cleaned));
+      }
+      continue;
+    }
+    for (const fragment of segment.split(/\s+and\s+|,\s*/)) {
+      const cleaned = fragment.replace(/\([^)]*\)/g, '').trim();
+      if (!cleaned) continue;
+      const head = cleaned
+        .split(/\s+/)
+        .slice(0, 3)
+        .join(' ')
+        .replace(/[.,;:!?]+$/, '')
+        .trim();
+      if (!head) continue;
+      const lower = head.toLowerCase();
+      if (ACTOR_BLOCKLIST.has(lower)) continue;
+      if (head.length < 3 || head.length > 40) continue;
+      inline.push(titleCase(head));
+    }
+  }
+  const ordered = explicit.length ? unique(explicit) : unique(inline);
+  const deduped = ordered.slice(0, 3);
+  if (!deduped.length) return [];
+  return deduped.map((name, idx) =>
+    actor(
+      name,
+      idx === 0 ? 'primary-user' : 'secondary-user',
+      [name.toLowerCase()],
+      idx === 0 ? ['Drive the core workflow'] : ['Participate in or review the workflow'],
+      idx === 0 ? ['Core records they own'] : ['Records they participate in']
+    )
+  );
+}
+
+function deriveEntitiesFromBrief(input: ProjectInput, args: BuildArgs): OntologyEntity[] {
+  const dataItems = splitItems(input.dataAndIntegrations);
+  const featureItems = args.mustHaves.concat(args.niceToHaves);
+  const candidates: string[] = [];
+  for (const raw of dataItems.concat(featureItems)) {
+    const cleaned = raw.replace(/\([^)]*\)/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!cleaned) continue;
+    // Try "<noun phrase> with ..." or "<noun phrase> for ..."
+    const head = cleaned.split(/\s+with\s+|\s+for\s+|\s+by\s+|\s+in\s+|\s+of\s+|\.|;|:/)[0].trim();
+    if (head && head.length <= 40 && /^[A-Za-z][A-Za-z0-9 \-/]*$/.test(head)) {
+      candidates.push(head);
+    }
+  }
+  // Score candidates by whether they contain a known entity-hint noun.
+  const scored = candidates.map((candidate) => {
+    const lower = candidate.toLowerCase();
+    const hint = ENTITY_HINT_NOUNS.find((noun) => lower.includes(noun));
+    return { candidate, score: hint ? 2 : lower.split(/\s+/).length === 1 ? 0 : 1 };
+  });
+  // Prefer multi-word names that include a hint noun, then de-dup by lower-case.
+  scored.sort((a, b) => b.score - a.score);
+  const seen = new Set<string>();
+  const picked: string[] = [];
+  for (const { candidate } of scored) {
+    const key = candidate.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    picked.push(titleCase(candidate));
+    if (picked.length >= 4) break;
+  }
+  if (!picked.length) {
+    // Fall back to product name as the single entity.
+    picked.push(titleCase(input.productName || 'Core Record') + ' Record');
+  }
+  return picked.map((name, idx) => {
+    const idField = `${name.split(/\s+/).map((part, partIdx) => (partIdx === 0 ? part.toLowerCase() : part)).join('')}Id`;
+    const idExample = `${slugify(name)}-001`;
+    const sample: Record<string, string | number | boolean | null> = {
+      [idField]: idExample,
+      name,
+      status: idx === 0 ? 'active' : 'pending'
+    };
+    return entity({
+      name,
+      type: idx === 0 ? 'core-record' : 'support-record',
+      core: idx === 0,
+      description: `Brief-derived ${name.toLowerCase()} record (placeholder until verified against the actual data model).`,
+      aliases: [name.toLowerCase(), name.split(/\s+/)[0].toLowerCase()],
+      fields: [
+        field(idField, 'id', `Stable ${name.toLowerCase()} identifier.`, idExample),
+        field('name', 'string', `Human label for the ${name.toLowerCase()}.`, name),
+        field('status', 'enum', 'Current state.', sample.status as string)
+      ],
+      relationships: idx === 0 ? [] : [`Referenced by ${(candidates[0] || name)} records`],
+      ownerActors: [],
+      riskTypes: ['Generic workflow risk'],
+      sample
+    });
+  });
+}
+
+function buildBriefDerivedBlueprint(input: ProjectInput, args: BuildArgs, fallback: Blueprint): Blueprint {
+  const actors = deriveActorsFromAudience(args.audienceSegments);
+  const entities = deriveEntitiesFromBrief(input, args);
+  const finalActors = actors.length ? actors : fallback.actors;
+  const finalEntities = entities.length ? entities : fallback.entities;
+  const primaryEntity = finalEntities[0];
+  const productLabel = (input.productName || 'Core').trim() || 'Core';
+  const workflowName = `${productLabel} core workflow`;
+  const workflows = [
+    workflow({
+      name: workflowName,
+      type: 'record-create',
+      aliases: [workflowName.toLowerCase(), 'core workflow', 'workflow'],
+      description: `Primary workflow inferred from the brief, anchored on ${primaryEntity?.name || 'the core record'}.`,
+      primaryActors: finalActors.slice(0, 1).map((a) => a.name),
+      entityRefs: finalEntities.map((e) => e.name),
+      steps: ['Create core record', 'Update state', 'Review outcome'],
+      failureModes: ['Required record details are missing', 'Outcome is not reviewable'],
+      featureTriggers: finalEntities.flatMap((e) => e.aliases.slice(0, 2)).concat(['workflow', 'core']),
+      acceptancePattern: 'record-create'
+    })
+  ];
+  return {
+    actors: finalActors,
+    entities: finalEntities,
+    workflows,
+    integrations: fallback.integrations,
+    risks: fallback.risks
+  };
+}
+
 function inferActors(audienceSegments: string[], blueprint: Blueprint) {
   const audience = audienceSegments.join(' ');
   const matched = blueprint.actors.filter((candidate) => containsAny(audience, candidate.aliases));
@@ -751,10 +1010,14 @@ function chooseIntegrationsForFeature(feature: string, integrations: OntologyInt
 }
 
 function chooseActorForFeature(feature: string, workflowChoice: OntologyWorkflow, actors: OntologyActor[]) {
+  // Prefer an actor mentioned in the feature itself (e.g. "Student joins …" → Student),
+  // then the workflow's primary actor, then the first actor.
+  const featureAliasMatch = actors.find((candidate) =>
+    candidate.aliases.some((alias) => containsAny(feature, [alias]))
+  );
+  if (featureAliasMatch) return featureAliasMatch;
   const workflowActor = workflowChoice.primaryActors[0];
-  const matched =
-    actors.find((candidate) => candidate.name === workflowActor) ||
-    actors.find((candidate) => candidate.aliases.some((alias) => containsAny(feature, [alias])));
+  const matched = actors.find((candidate) => candidate.name === workflowActor);
   return matched || actors[0];
 }
 
@@ -1056,7 +1319,9 @@ function collectFieldTypes(entities: OntologyEntity[]) {
 }
 
 export function buildDomainOntology(input: ProjectInput, args: BuildArgs): DomainOntology {
-  const blueprint = buildBlueprint(args.domainArchetype);
+  const baseBlueprint = buildBlueprint(args.domainArchetype);
+  const blueprint =
+    args.domainArchetype === 'general' ? buildBriefDerivedBlueprint(input, args, baseBlueprint) : baseBlueprint;
   const sourcePhrases = unique(args.mustHaves.concat(args.niceToHaves, args.integrations, splitItems(input.problemStatement), splitItems(input.productIdea)));
   const actorTypes = inferActors(args.audienceSegments, blueprint);
   const entityTypes = inferEntities(sourcePhrases, blueprint);

@@ -84,6 +84,10 @@ export async function createArtifactPackage(options: {
 
 async function main() {
   const input = loadInput(getArg('input'));
+  const archetypeArg = getArg('archetype');
+  if (archetypeArg) {
+    input.archetypeOverride = archetypeArg;
+  }
   const result = await createArtifactPackage({
     input,
     outDir: getArg('out') || generateProjectBundle(input).exportRoot,

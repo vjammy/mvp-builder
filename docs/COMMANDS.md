@@ -28,12 +28,13 @@ Heavier swarm test that generates and validates 10 example projects. Use when ch
 Generates a markdown workspace from a project input.
 
 ```bash
-npm run create-project -- --input=<file.json> --out=<dir> [--zip=true]
+npm run create-project -- --input=<file.json> --out=<dir> [--zip=true] [--archetype=<name>]
 ```
 
 - `--input` — path to a JSON file matching `ProjectInput` (see `examples/family-task-app.json`).
 - `--out` — output directory; the workspace is created at `<out>/mvp-builder-workspace/`.
 - `--zip=true` — also produce `<out>/mvp-builder-workspace.zip`.
+- `--archetype=<name>` — override the keyword-based domain classifier. Valid values: `general`, `family-task`, `family-readiness`, `restaurant-ordering`, `budget-planner`, `inventory`, `clinic-scheduler`, `hoa-maintenance`, `school-club`, `volunteer-manager`, `sdr-sales`. Use `auto` (or omit) to keep keyword detection. Use `general` for any product that doesn't cleanly match a built-in archetype — actors, entities, and sample data are then derived from the brief itself rather than from a baked-in template. Equivalent JSON field: `archetypeOverride`.
 
 Default input: `lib/templates.ts > baseProjectInput()` (a generic placeholder).
 

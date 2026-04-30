@@ -95,10 +95,48 @@ function ensureTrailingNewline(value: string) {
 }
 
 function splitItems(value: string) {
-  return value
-    .split(/\n|,/)
-    .map((item) => item.trim())
-    .filter(Boolean);
+  if (!value) return [];
+  const items: string[] = [];
+  let buf = '';
+  let parenDepth = 0;
+  let bracketDepth = 0;
+  for (const ch of value) {
+    if (ch === '(' || ch === '[') {
+      if (ch === '(') parenDepth++;
+      else bracketDepth++;
+      buf += ch;
+      continue;
+    }
+    if (ch === ')' || ch === ']') {
+      if (ch === ')') parenDepth = Math.max(0, parenDepth - 1);
+      else bracketDepth = Math.max(0, bracketDepth - 1);
+      buf += ch;
+      continue;
+    }
+    const isSeparator =
+      (ch === '\n' || ch === ';' || ch === ',') && parenDepth === 0 && bracketDepth === 0;
+    if (isSeparator) {
+      const trimmed = buf.trim();
+      if (trimmed) items.push(trimmed);
+      buf = '';
+      continue;
+    }
+    buf += ch;
+  }
+  const tail = buf.trim();
+  if (tail) items.push(tail);
+  // Treat sentence-style "Foo. Bar. Baz." as a list when the source clearly is one
+  // (4+ short clauses ending in periods, no other separators picked anything up).
+  if (items.length === 1) {
+    const clauses = items[0]
+      .split(/\.\s+/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+    if (clauses.length >= 4 && clauses.every((part) => part.length <= 80)) {
+      return clauses.map((part) => part.replace(/\.$/, '').trim()).filter(Boolean);
+    }
+  }
+  return items;
 }
 
 function wordCount(value: string) {
@@ -116,6 +154,65 @@ function listToBullets(items: string[], fallback: string) {
 
 function truncateText(value: string, _maxWords: number) {
   return value.trim();
+}
+
+function forTitle(value: string, fallback: string, maxLength = 60): string {
+  const trimmed = (value || '').trim();
+  if (!trimmed) return fallback;
+  if (trimmed.length <= maxLength) return trimmed;
+  // Take the first clause/sentence/list-item and truncate it cleanly.
+  const firstClause = trimmed.split(/[.;\n]/)[0].trim();
+  const candidate = firstClause.length && firstClause.length <= maxLength ? firstClause : trimmed.slice(0, maxLength).trim();
+  return candidate.replace(/[\s,;:.\-]+$/, '') || fallback;
+}
+
+function extractRoleHead(value: string, fallback: string, maxWords = 4): string {
+  const trimmed = (value || '').trim();
+  if (!trimmed) return fallback;
+  // Cut at relative-clause / conjunction boundaries.
+  const head = trimmed.split(/\s+(?:and|or|who|that|which|where|when)\s+/i)[0].trim();
+  const words = head
+    .replace(/^[\s,;:.\-]+|[\s,;:.\-]+$/g, '')
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, maxWords)
+    .join(' ');
+  return words || fallback;
+}
+
+function buildFocusSummary(blueprint: PhaseBlueprint, context: ProjectContext): string {
+  const audience = context.primaryAudience;
+  const feature = context.primaryFeature;
+  const tagFocus: Record<PhaseBlueprint['tag'], string> = {
+    brief: 'locking the brief, scope, and guardrails',
+    audience: 'mapping audience priority and stakeholder influence',
+    workflow: 'tracing the core, support, and failure paths',
+    scope: 'separating v1 must-haves from deferred work',
+    'business-value': 'making business value and metrics explicit',
+    stakeholders: 'naming who can block adoption and how to keep them aligned',
+    operations: 'turning trust, support, and rollout risks into gates',
+    data: 'naming entities, data boundaries, and integration interfaces',
+    architecture: 'translating the plan into repo structure and module boundaries',
+    testing: 'making testability and review evidence explicit',
+    deployment: 'turning release assumptions into environment and rollback gates',
+    security: 'converting failure modes and trust risks into technical gates',
+    observability: 'making support and observability needs visible',
+    handoff: 'packaging the work for the next builder',
+    rollout: 'confirming readiness before disciplined implementation',
+    scaling: 'identifying scale and concurrency assumptions to confirm now',
+    permissions: 'making role boundaries and permissions explicit',
+    emergency: 'reviewing emergency-mode boundaries and language',
+    qualification: 'tightening qualification rules with evidence',
+    ordering: 'tightening order-state and handoff rules',
+    budgeting: 'tightening budget thresholds and review boundaries',
+    scheduling: 'tightening scheduling rules and conflict handling',
+    maintenance: 'tightening request triage and escalation paths',
+    events: 'tightening event sign-up, capacity, and visibility rules',
+    inventory: 'tightening stock state, adjustment, and reorder rules',
+    review: 'running a focused dry-run or evidence audit'
+  };
+  const focus = tagFocus[blueprint.tag] || 'tightening this phase against the brief';
+  return `Focus: ${focus}, anchored on ${feature} for ${audience}. Mode: ${context.profile.label}.`;
 }
 
 const crossDomainEchoTerms: Record<string, string[]> = {
@@ -724,7 +821,42 @@ function detectRiskFlags(input: ProjectInput): ProjectContext['riskFlags'] {
   return unique(flags);
 }
 
+const VALID_ARCHETYPES: ReadonlyArray<DomainArchetype> = [
+  'family-task',
+  'family-readiness',
+  'restaurant-ordering',
+  'budget-planner',
+  'inventory',
+  'clinic-scheduler',
+  'hoa-maintenance',
+  'school-club',
+  'volunteer-manager',
+  'sdr-sales',
+  'general'
+];
+
+function isValidArchetype(value: string): value is DomainArchetype {
+  return (VALID_ARCHETYPES as ReadonlyArray<string>).includes(value);
+}
+
+const warnedInvalidOverrides = new WeakSet<ProjectInput>();
+
 function detectDomainArchetype(input: ProjectInput): ProjectContext['domainArchetype'] {
+  const override = (input.archetypeOverride || '').trim().toLowerCase();
+  if (override) {
+    if (override === 'none' || override === 'auto' || override === '') {
+      // explicit "auto" falls through to detection
+    } else if (isValidArchetype(override)) {
+      return override;
+    } else if (!warnedInvalidOverrides.has(input)) {
+      warnedInvalidOverrides.add(input);
+      console.warn(
+        `[mvp-builder] archetypeOverride="${input.archetypeOverride}" is not a known archetype. ` +
+          `Valid values: ${VALID_ARCHETYPES.join(', ')} or "none"/"auto" for keyword detection. Falling back to detection.`
+      );
+    }
+  }
+
   const source = [input.productName, input.productIdea, input.targetAudience, input.mustHaveFeatures, input.risks]
     .join(' ')
     .toLowerCase();
@@ -940,9 +1072,9 @@ function buildContext(input: ProjectInput): ProjectContext {
     audienceSegments,
     keywords,
     answers,
-    primaryAudience: audienceSegments[0] || 'the primary target user',
-    primaryFeature: mustHaves[0] || truncateText(input.desiredOutput, 8) || input.productName,
-    secondaryFeature: mustHaves[1] || truncateText(input.productIdea, 8),
+    primaryAudience: extractRoleHead(audienceSegments[0] || '', 'the primary target user', 4),
+    primaryFeature: forTitle(mustHaves[0] || truncateText(input.desiredOutput, 8) || input.productName, input.productName, 60),
+    secondaryFeature: forTitle(mustHaves[1] || truncateText(input.productIdea, 8), input.productName, 60),
     outputAnchor: truncateText(input.desiredOutput || input.productIdea, 10),
     workflowAnchor: truncateText(answers['primary-workflow'] || input.desiredOutput, 12),
     riskAnchor: truncateText(answers['operating-risks'] || input.risks, 12),
@@ -3272,7 +3404,7 @@ function buildPhaseContent(
     name: blueprint.name,
     phaseType: blueprint.phaseType,
     goal: blueprint.rationale,
-    focusSummary: `This phase is shaped by ${context.primaryAudience}, ${context.primaryFeature}, and the selected mode ${context.profile.label}.`,
+    focusSummary: buildFocusSummary(blueprint, context),
     riskFocus,
     generatedFromInput,
     needsConfirmation,
