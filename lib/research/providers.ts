@@ -86,17 +86,25 @@ export class MockResearchProvider implements ResearchProvider {
  */
 export async function loadAnthropicProvider(opts: {
   apiKey?: string;
+  authToken?: string;
   model?: string;
 }): Promise<ResearchProvider> {
-  const apiKey = opts.apiKey ?? process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    throw new Error('Anthropic provider requires ANTHROPIC_API_KEY environment variable.');
+  // Two auth modes: a raw ANTHROPIC_API_KEY, or an OAuth bearer token (used when
+  // mvp-builder is invoked from inside a Claude Code / Codex / OpenCode session
+  // where the host already has a managed token). Pass --auth-token=$CLAUDE_CODE_OAUTH_TOKEN
+  // or set CLAUDE_CODE_OAUTH_TOKEN in the environment for the agent path.
+  const apiKey = opts.apiKey ?? (process.env.ANTHROPIC_API_KEY || '');
+  const authToken = opts.authToken ?? (process.env.CLAUDE_CODE_OAUTH_TOKEN || '');
+  if (!apiKey && !authToken) {
+    throw new Error(
+      'Anthropic provider requires ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN. The agent path uses the OAuth token; the standalone path uses the API key.'
+    );
   }
   const model = opts.model ?? 'claude-sonnet-4-6';
 
   // SDK is loaded dynamically and type-erased so the framework type-checks
   // even when @anthropic-ai/sdk isn't installed (mock-only environments).
-  let SDK: { default: new (opts: { apiKey: string }) => unknown };
+  let SDK: { default: new (opts: { apiKey?: string; authToken?: string }) => unknown };
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     SDK = (await import('@anthropic-ai/sdk' as any)) as typeof SDK;
@@ -106,8 +114,14 @@ export async function loadAnthropicProvider(opts: {
     );
   }
 
+  // Prefer an explicit api key; fall back to OAuth. Pass apiKey: null explicitly
+  // when using OAuth because the SDK auto-reads ANTHROPIC_API_KEY from env even
+  // when it's an empty string, which then conflicts with the auth token.
+  const clientOpts = apiKey
+    ? ({ apiKey, authToken: null as unknown as string } as { apiKey: string; authToken: string })
+    : ({ apiKey: null as unknown as string, authToken } as { apiKey: string; authToken: string });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const client = new SDK.default({ apiKey }) as any;
+  const client = new SDK.default(clientOpts) as any;
 
   const { researcherPrompt, criticPrompt, extractionPrompt } = await import('./prompts');
 

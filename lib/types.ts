@@ -234,4 +234,12 @@ export type ProjectBundle = {
   files: GeneratedFile[];
   archetypeDetection: ArchetypeDetectionSummary;
   semanticFit: SemanticFitSummary;
+  /**
+   * True when the bundle was generated from research extractions
+   * (research/extracted/*.json). Renders that previously assumed archetype
+   * was the source of truth (FINAL_SCORECARD's "Domain archetype detection",
+   * lifecycle warnings) gate on this so they don't emit misleading
+   * archetype-warning copy on the research-driven path.
+   */
+  hasResearchExtractions?: boolean;
 };

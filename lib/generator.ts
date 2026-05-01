@@ -7801,9 +7801,13 @@ function buildFinalScorecard(bundle?: ProjectBundle) {
 
 ## Why two scores
 
-Build readiness measures whether the workspace is structurally complete and well-formed (problem framing, audience clarity, workflow detail, constraints, implementation readiness, handoff completeness). Product fit measures whether the workspace actually describes the right product (risk coverage, acceptance quality, testability, semantic fit between brief and generated requirements). High build readiness with low product fit means the workspace looks polished but may have been generated against the wrong domain archetype.
+Build readiness measures whether the workspace is structurally complete and well-formed (problem framing, audience clarity, workflow detail, constraints, implementation readiness, handoff completeness). Product fit measures whether the workspace actually describes the right product (risk coverage, acceptance quality, testability, semantic fit between brief and generated requirements).${bundle.hasResearchExtractions ? '' : ' High build readiness with low product fit means the workspace looks polished but may have been generated against the wrong domain archetype.'}
 
-## Domain archetype detection
+${bundle.hasResearchExtractions
+    ? `## Source of truth
+
+This workspace was generated from research extractions in \`research/extracted/\`. Entities, actors, workflows, and requirements come from the research, not from a keyword-routed archetype template. The archetype tag is therefore pinned to \`general\` (informational only) and the legacy archetype-detection / Jaccard-confidence sections below do not apply.`
+    : `## Domain archetype detection
 
 - Archetype picked: **${det.archetype}**
 - Method: ${det.method}
@@ -7825,7 +7829,7 @@ The verdict combines this Jaccard score with the archetype-detection confidence 
 
 - \`high\` — archetype confidence and overlap together suggest the requirements describe the same product as the brief.
 - \`low\` — Jaccard < 0.13 and archetype confidence < 0.6: the generated requirements may describe a related-but-different product.
-- \`critical\` — Jaccard < 0.10 and archetype confidence < 0.4: archetype routing likely failed; regenerate after fixing the brief or archetype.
+- \`critical\` — Jaccard < 0.10 and archetype confidence < 0.4: archetype routing likely failed; regenerate after fixing the brief or archetype.`}
 
 ## Category breakdown
 
@@ -9483,7 +9487,11 @@ export function generateProjectBundle(
       });
     }
   }
-  if (context.archetypeDetection.archetype === 'general') {
+  // Phase A3b: only warn about the generic-archetype fallback when research
+  // extractions are absent. With research present, the archetype tag is pinned
+  // to 'general' by design (research is the source of truth for entities,
+  // actors, workflows) and the generic-placeholder warning would be misleading.
+  if (context.archetypeDetection.archetype === 'general' && !context.extractions) {
     const id = 'archetype-general-fallback';
     if (!warnings.some((w) => w.id === id)) {
       warnings.push({
@@ -9493,9 +9501,9 @@ export function generateProjectBundle(
         message:
           'No domain archetype anchored against this brief. Generated requirements, entities, and sample data will use generic placeholders rather than domain-specific terms.',
         action:
-          'Either accept the generic baseline and refine the requirements/entities by hand, or edit the brief to match a closer archetype keyword before regenerating.',
+          'Either accept the generic baseline and refine the requirements/entities by hand, or run docs/RESEARCH_RECIPE.md to produce research extractions before regenerating.',
         source: 'generator',
-        openQuestion: 'Is the generic baseline acceptable, or should the brief be revised to anchor a specific archetype?',
+        openQuestion: 'Is the generic baseline acceptable, or should research extractions be produced first?',
         assumption: context.archetypeDetection.rationale
       });
     }
@@ -9531,7 +9539,8 @@ export function generateProjectBundle(
     approvedForBuild,
     files: [],
     archetypeDetection: context.archetypeDetection,
-    semanticFit
+    semanticFit,
+    hasResearchExtractions: Boolean(context.extractions)
   };
 
   bundle.files = createGeneratedFiles(bundle, input, context);
