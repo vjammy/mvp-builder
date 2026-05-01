@@ -240,6 +240,112 @@ If `finalCriticScores.useCase < 70` or `finalCriticScores.domain < 65`, surface 
 
 ---
 
+## Step 9 — Audit exit and targeted re-extraction
+
+The 8 passes above produce schema-valid extractions. They do **not** guarantee the resulting workspace will pass the quality audit. Step 9 closes that loop.
+
+### What to do
+
+1. **Generate the workspace.**
+
+   ```bash
+   npm run create-project -- --input=<brief.json> --out=<workspace> --research-from=<your-research-dir>
+   ```
+
+2. **Run the audit.**
+
+   ```bash
+   npm run audit -- --package=<workspace>/mvp-builder-workspace
+   ```
+
+3. **Read the result.** The audit prints `total/100`, the rating, and per-dimension scores. It also surfaces an `## Expert rubric (Phase D)` section with `Cap applied:` and individual expert dimensions (`research-depth`, `edge-case-coverage`, `role-permission-matrix`, `regulatory-mapping`, `realistic-sample-data`).
+
+### Default exit bar
+
+The recipe is considered done only when **all** of the following hold on the audit result:
+
+- `total >= 95`
+- `Cap applied: none` (i.e. no expert cap fires)
+- workspace remains `production-ready`
+- workspace remains `research-grounded` (the deprecated `Generated WITHOUT research extractions` banner is absent from `requirements/FUNCTIONAL_REQUIREMENTS.md`)
+
+Below the bar → trigger **targeted re-extraction**. Do not rerun the full 7-pass research loop unless the extractions are structurally invalid (schema validation failed). The 7 passes above already converged on industry framing, vocabulary, and scope — re-running them is wasteful and tends to regenerate the same content.
+
+### Targeted re-extraction
+
+For each blocker in `## Top findings` and each entry in `Cap applied: …`, identify which **upstream pass** owns the fix:
+
+| Audit cap or finding | Upstream pass to redo | What to add |
+| --- | --- | --- |
+| `research-depth < 4/10` | Pass 3 (entities) + Pass 4 (workflows) | More entities / more workflow steps with `branchOn` decision points |
+| `edge-case-coverage` (≥40% generic triggers) | Pass 4 (workflows) — failureModes only | Replace "invalid input" / "user error" with domain-specific triggers (e.g. "Lead opts out via reply", "Bounce volume spikes >5%") |
+| `role-permission-matrix` (no DENY cells, or matrix missing) | Pass 2 (actors) — visibility + scope | Add `visibility[]` lists that explicitly exclude entities; ensure ≥2 actors with non-overlapping ownership |
+| `regulatory-mapping < 2/5` | Pass 6 (gates) | Add gates with `mandatedBy: 'regulation'` and citations in `mandatedByDetail` (GDPR Art. N, CAN-SPAM, HIPAA §X, etc.) |
+| `realistic-sample-data` (<30% domain-conventional IDs) | Pass 3 (entities) — sample only | Replace `record-001` style IDs with domain conventions (`acct-acme-001`, `MRN-484823`, `seq-mfg-cold-v3`) |
+| Anti-features missing from artifacts | Pass 6 (anti-features) | Re-derive from brief non-goals; add the explicit exclusions the brief states |
+
+Edit only the JSON file the targeted pass owns, regenerate the workspace, re-audit. Each retry should change exactly the dimensions the audit flagged.
+
+### Retry budget
+
+**Maximum 2 retries by default.** A run that needs more than 2 retries usually has a thin brief — surface a warning to the user and stop. Real fixes after 2 retries don't come from running the recipe again; they come from the user adding detail to the brief.
+
+If the third retry would still be required, write the audit findings to `research/AUDIT_RETRY_EXHAUSTED.md` so the human knows where the gap is.
+
+### Worked example: missing role-permission matrix
+
+Audit output on first attempt:
+
+```
+## Top findings
+- BLOCKER [expert-rubric] cap 87: multiple actors but no permission matrix
+
+## Expert rubric (Phase D)
+- Cap applied: 87
+
+| Dimension | Score | Max |
+| role-permission-matrix | 2 | 10 |
+| (others) | … | … |
+```
+
+Diagnosis: the brief has 4 actors but the workspace's `requirements/PERMISSION_MATRIX.md` is missing or empty because the actors in `actors.json` have no `visibility[]` and no scope distinction — the matrix generator can't tell them apart.
+
+**Targeted re-extraction (Pass 2 only):**
+
+```json
+[
+  {
+    "id": "actor-sdr",
+    "name": "Sales Development Rep",
+    "type": "primary-user",
+    "responsibilities": ["..."],
+    "visibility": ["own assigned leads", "own activity history"],
+    ...
+  },
+  {
+    "id": "actor-sales-manager",
+    "name": "Sales Manager",
+    "type": "reviewer",
+    "responsibilities": ["..."],
+    "visibility": ["all SDR leads on their team", "all sequences", "pipeline aggregates"],
+    ...
+  }
+]
+```
+
+The added `visibility[]` arrays let `lib/generator/permission-matrix.ts` populate the actor × entity grid. Entities that don't appear in any actor's visibility get `DENY` cells, which the audit's `role-permission-matrix` dimension specifically rewards.
+
+Regenerate, re-audit. Score should jump from 87 (capped) to ≥95.
+
+### How the agent vs. SDK paths differ
+
+- **Agent path (you, running this recipe in Claude Code / Codex / Kimi / OpenCode):** the loop above is manual. Generate, audit, read findings, edit the relevant JSON file, regenerate, re-audit. Stop after 2 retries.
+- **SDK path (`scripts/run-real-research-on-brief.ts` with `--audit-threshold=95`):** the loop is automated by `lib/research/loop.ts` `auditExit` config. The script runs research → extract → audit → if failing, feeds audit findings as critic gaps and runs one targeted research pass per topic + re-extracts → re-audits. Same retry budget.
+
+Both paths converge on the same exit criteria. The SDK path is gated by `ANTHROPIC_API_KEY`; the agent path needs no key (the agent already has model access).
+
+---
+
 ## Worked partial example — for an SDR brief
 
 A fragment to set the depth bar. Don't copy this; produce equivalent depth for your own brief.
