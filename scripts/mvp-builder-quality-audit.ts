@@ -700,7 +700,16 @@ type ResearchExtractsLite = {
   entities: Array<{
     id: string;
     name: string;
-    fields: Array<{ name: string; pii?: boolean; sensitive?: boolean; example?: unknown }>;
+    fields: Array<{
+      name: string;
+      pii?: boolean;
+      sensitive?: boolean;
+      example?: unknown;
+      dbType?: string;
+      indexed?: boolean;
+      unique?: boolean;
+      fk?: { entityId: string; fieldName: string; onDelete: string };
+    }>;
     sample: Record<string, unknown>;
     ownerActors: string[];
   }>;
@@ -723,6 +732,13 @@ type ResearchExtractsLite = {
     navOut: Array<{ screen: string }>;
   }>;
   uxFlow?: Array<{ fromScreen: string; toScreen: string; viaAction: string }>;
+  testCases?: Array<{
+    id: string;
+    workflowId: string;
+    scenario: 'happy-path' | 'edge-case' | 'failure-mode';
+    testDataRefs: string[];
+    expectedFailureRef?: string;
+  }>;
 };
 
 function loadExtracts(packageRoot: string): ResearchExtractsLite | undefined {
@@ -743,7 +759,8 @@ function loadExtracts(packageRoot: string): ResearchExtractsLite | undefined {
     gates: (safe('gates.json') as ResearchExtractsLite['gates']) || [],
     antiFeatures: (safe('antiFeatures.json') as ResearchExtractsLite['antiFeatures']) || [],
     screens: (safe('screens.json') as ResearchExtractsLite['screens']) || undefined,
-    uxFlow: (safe('uxFlow.json') as ResearchExtractsLite['uxFlow']) || undefined
+    uxFlow: (safe('uxFlow.json') as ResearchExtractsLite['uxFlow']) || undefined,
+    testCases: (safe('testCases.json') as ResearchExtractsLite['testCases']) || undefined
   };
 }
 
@@ -1075,6 +1092,112 @@ function expertScreenDepth(ex: ResearchExtractsLite, packageRoot: string): Exper
   return { name: 'screen-depth', score: Math.min(10, score), max: 10, evidence, cap };
 }
 
+// E7 (Phase E3). schema-realism (max 10) — only scored when entity fields carry dbType.
+function expertSchemaRealism(ex: ResearchExtractsLite, packageRoot: string): ExpertScore | undefined {
+  const allFields = ex.entities.flatMap((e) => e.fields);
+  if (allFields.length === 0) return undefined;
+  const fieldsWithDbType = allFields.filter((f) => f.dbType);
+  if (fieldsWithDbType.length === 0) return undefined;
+
+  const evidence: string[] = [];
+  let score = 0;
+
+  const dbTypeRatio = fieldsWithDbType.length / allFields.length;
+  evidence.push(`fields with dbType: ${fieldsWithDbType.length}/${allFields.length} (${Math.round(dbTypeRatio * 100)}%)`);
+  if (dbTypeRatio >= 0.95) score += 3;
+  else if (dbTypeRatio >= 0.7) score += 2;
+  else if (dbTypeRatio >= 0.4) score += 1;
+
+  const fkFields = allFields.filter((f) => f.fk);
+  evidence.push(`fields with fk: ${fkFields.length}`);
+  if (fkFields.length >= 2) score += 2;
+  else if (fkFields.length >= 1) score += 1;
+
+  const indexedFields = allFields.filter((f) => f.indexed);
+  evidence.push(`indexed fields: ${indexedFields.length}`);
+  if (indexedFields.length >= ex.entities.length) score += 2;   // ≥1 index per table
+  else if (indexedFields.length >= Math.ceil(ex.entities.length * 0.5)) score += 1;
+
+  const ddlPresent = fs.existsSync(path.join(packageRoot, 'architecture/DATABASE_SCHEMA.sql'));
+  evidence.push(`architecture/DATABASE_SCHEMA.sql present: ${ddlPresent}`);
+  if (ddlPresent) score += 2;
+
+  const dataModelMd = readSafe(path.join(packageRoot, 'architecture/DATABASE_SCHEMA.md'));
+  const tablesMentioned = ex.entities.filter((e) => dataModelMd.toLowerCase().includes(e.name.toLowerCase())).length;
+  evidence.push(`DATABASE_SCHEMA.md mentions ${tablesMentioned}/${ex.entities.length} entities`);
+  if (ex.entities.length && tablesMentioned === ex.entities.length) score += 1;
+
+  const cap =
+    dbTypeRatio < 0.4 || !ddlPresent
+      ? { applied: 90, reason: `schema realism weak: dbType ratio ${Math.round(dbTypeRatio * 100)}%, DDL present=${ddlPresent}` }
+      : undefined;
+
+  return { name: 'schema-realism', score: Math.min(10, score), max: 10, evidence, cap };
+}
+
+// E8 (Phase E3). test-case-grounding (max 10) — only when extractions include testCases.
+function expertTestCaseGrounding(ex: ResearchExtractsLite): ExpertScore | undefined {
+  if (!ex.testCases || ex.testCases.length === 0) return undefined;
+
+  const evidence: string[] = [];
+  let score = 0;
+
+  // Build the set of valid sample data refs from entity samples + variant heuristics.
+  const validRefs = new Set<string>();
+  for (const e of ex.entities) {
+    const sample = e.sample as Record<string, unknown>;
+    for (const [, v] of Object.entries(sample || {})) {
+      if (typeof v === 'string' && v.length >= 3) validRefs.add(v);
+    }
+  }
+  // Also accept variant- and negative- prefixed refs.
+  const total = ex.testCases.length;
+  const refOk = ex.testCases.filter((t) =>
+    t.testDataRefs.some(
+      (r) => validRefs.has(r) || /^variant-/.test(r) || /^negative-/.test(r)
+    )
+  ).length;
+  evidence.push(`test cases with grounded sample refs: ${refOk}/${total}`);
+  const refRatio = total ? refOk / total : 0;
+  if (refRatio >= 0.95) score += 4;
+  else if (refRatio >= 0.7) score += 2;
+  else if (refRatio >= 0.4) score += 1;
+
+  // Failure-mode coverage: every researched failure mode should have ≥1 matching case.
+  const totalFailureModes = ex.workflows.reduce((s, w) => s + w.failureModes.length, 0);
+  const coveredFailureModes = new Set<string>();
+  for (const t of ex.testCases) {
+    if (t.scenario === 'failure-mode' && t.expectedFailureRef) {
+      coveredFailureModes.add(`${t.workflowId}:${t.expectedFailureRef}`);
+    }
+  }
+  evidence.push(`failure-mode coverage: ${coveredFailureModes.size}/${totalFailureModes}`);
+  const fmRatio = totalFailureModes ? coveredFailureModes.size / totalFailureModes : 1;
+  if (fmRatio >= 0.95) score += 3;
+  else if (fmRatio >= 0.7) score += 2;
+  else if (fmRatio >= 0.4) score += 1;
+
+  // Scenario sanity: every workflow should have ≥1 happy-path test.
+  const wfsWithHappy = new Set<string>();
+  for (const t of ex.testCases) if (t.scenario === 'happy-path') wfsWithHappy.add(t.workflowId);
+  evidence.push(`workflows with ≥1 happy-path test: ${wfsWithHappy.size}/${ex.workflows.length}`);
+  const happyRatio = ex.workflows.length ? wfsWithHappy.size / ex.workflows.length : 1;
+  if (happyRatio >= 0.95) score += 2;
+  else if (happyRatio >= 0.7) score += 1;
+
+  // Edge-case presence (any) is a small bonus.
+  const hasEdge = ex.testCases.some((t) => t.scenario === 'edge-case');
+  evidence.push(`edge-case tests present: ${hasEdge}`);
+  if (hasEdge) score += 1;
+
+  const cap =
+    refRatio < 0.4 || happyRatio < 0.4
+      ? { applied: 91, reason: `test cases poorly grounded: ref ratio ${Math.round(refRatio * 100)}%, workflow happy-path ratio ${Math.round(happyRatio * 100)}%` }
+      : undefined;
+
+  return { name: 'test-case-grounding', score: Math.min(10, score), max: 10, evidence, cap };
+}
+
 function evaluateExpertRubric(packageRoot: string): NonNullable<AuditResult['expert']> | undefined {
   const ex = loadExtracts(packageRoot);
   if (!ex) return undefined;
@@ -1088,6 +1211,10 @@ function evaluateExpertRubric(packageRoot: string): NonNullable<AuditResult['exp
   ];
   const screenDepth = expertScreenDepth(ex, packageRoot);
   if (screenDepth) dims.push(screenDepth);
+  const schemaRealism = expertSchemaRealism(ex, packageRoot);
+  if (schemaRealism) dims.push(schemaRealism);
+  const testCaseGrounding = expertTestCaseGrounding(ex);
+  if (testCaseGrounding) dims.push(testCaseGrounding);
 
   // Bonus: bonus = round(rawTotal / sumMax × 8). 8-point ceiling because 92 base + 8 = 100.
   const rawTotal = dims.reduce((s, d) => s + d.score, 0);

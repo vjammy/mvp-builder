@@ -58,6 +58,8 @@ export function writeResearchToWorkspace(workspaceRoot: string, result: LoopResu
   // Phase E2: optional artifacts. Write empty arrays so downstream readers see the keys consistently.
   writeJson(path.join(root, 'extracted', 'screens.json'), result.extractions.screens ?? []);
   writeJson(path.join(root, 'extracted', 'uxFlow.json'), result.extractions.uxFlow ?? []);
+  // Phase E3: optional test cases.
+  writeJson(path.join(root, 'extracted', 'testCases.json'), result.extractions.testCases ?? []);
 }
 
 function writePass(root: string, topic: 'use-case' | 'domain', pass: PassRecord) {
@@ -117,7 +119,8 @@ export function readExtractions(workspaceRoot: string): ResearchExtractions | nu
       conflicts: read('conflicts.json'),
       removed: read('_removed.json'),
       screens: optional('screens.json'),
-      uxFlow: optional('uxFlow.json')
+      uxFlow: optional('uxFlow.json'),
+      testCases: optional('testCases.json')
     };
     return e;
   } catch {

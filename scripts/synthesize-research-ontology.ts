@@ -28,8 +28,10 @@ import type {
   Actor,
   AntiFeature,
   Conflict,
+  DbType,
   Entity,
   EntityField,
+  ForeignKey,
   Gate,
   Integration,
   ResearchExtractions,
@@ -40,6 +42,7 @@ import type {
   ScreenField,
   ScreenSection,
   SourceRef,
+  TestCase,
   UxFlowEdge,
   Workflow,
   WorkflowFailure,
@@ -707,6 +710,160 @@ function deriveScreens(
   return out;
 }
 
+// ---------- DB types + FKs (Phase E3) ----------
+
+function inferDbType(field: EntityField): DbType {
+  const name = field.name.toLowerCase();
+  if (field.type === 'enum') return 'ENUM';
+  if (field.type === 'boolean') return 'BOOLEAN';
+  if (field.type === 'json') return 'JSONB';
+  if (field.type === 'date') return 'TIMESTAMPTZ';
+  if (/(^id$|Id$|_id$|ref$|Ref$)/.test(field.name)) return 'UUID';
+  if (/(^|_)at$|At$/.test(field.name)) return 'TIMESTAMPTZ';
+  if (/^date|Date$/.test(field.name)) return 'DATE';
+  if (/(amount|price|total|decimal|cost|fee|rate|balance|salary)/i.test(name)) return 'DECIMAL';
+  if (/(count|quantity|qty|rank|order|number|num|index|version)/i.test(name)) return 'INTEGER';
+  if (/(active|enabled|flag|is[A-Z]|has[A-Z]|deleted|locked|verified|published)/.test(field.name)) return 'BOOLEAN';
+  return 'TEXT';
+}
+
+function applyDbMetadata(entities: Entity[]): void {
+  // Build a map of "<entityId>-<idFieldName>" → entityId for FK resolution.
+  const entityIdFieldMap = new Map<string, { entityId: string; fieldName: string }>();
+  for (const e of entities) {
+    const idField = e.fields.find((f) => f.name === 'id' || /Id$/.test(f.name) || /^id$/.test(f.name));
+    if (idField) {
+      entityIdFieldMap.set(idField.name.toLowerCase(), { entityId: e.id, fieldName: idField.name });
+      // also map the entity name singular slug → id field, e.g. "lead" matches "leadId"
+      entityIdFieldMap.set(slug(e.name), { entityId: e.id, fieldName: idField.name });
+    }
+  }
+
+  for (const e of entities) {
+    for (const field of e.fields) {
+      // dbType
+      field.dbType = inferDbType(field);
+      // nullable + required
+      field.nullable = !field.required;
+      // indexed: id-like fields and FKs are indexed; explicit status fields too
+      if (/(^id$|Id$|_id$|ref$|Ref$)/.test(field.name) || field.name === 'status') {
+        field.indexed = true;
+      }
+      // unique: PK id + email
+      if (field.name === 'id' || field.name === `${slug(e.name).replace(/-/g, '')}Id` || /email/i.test(field.name)) {
+        field.unique = true;
+      }
+      // FK detection: explicit references first; else by *Id name match
+      if (field.references) {
+        const target = entities.find((x) => x.id === field.references);
+        if (target) {
+          const tIdField = target.fields.find((f) => f.name === 'id' || /Id$/.test(f.name)) || target.fields[0];
+          field.fk = { entityId: target.id, fieldName: tIdField?.name || 'id', onDelete: 'RESTRICT' };
+          field.indexed = true;
+        }
+      } else if (/Id$/.test(field.name) && field.name !== `${slug(e.name).replace(/-/g, '')}Id`) {
+        // e.g. "leadId" on Touch → look for entity whose id field is leadId or whose name is "lead"
+        const baseName = field.name.replace(/Id$/, '').toLowerCase();
+        const target = entities.find((x) => slug(x.name) === baseName || slug(x.name).startsWith(baseName));
+        if (target) {
+          const tIdField = target.fields.find((f) => f.name === 'id' || /Id$/.test(f.name)) || target.fields[0];
+          field.fk = { entityId: target.id, fieldName: tIdField?.name || 'id', onDelete: 'RESTRICT' };
+          field.indexed = true;
+          field.references = target.id;
+        }
+      }
+      // defaults: status -> first enum value, *At -> CURRENT_TIMESTAMP, booleans -> false
+      if (field.name === 'status' && field.enumValues?.length) {
+        field.defaultValue = field.enumValues[0];
+      } else if (field.dbType === 'TIMESTAMPTZ' && /(^|_|At$)/.test(field.name) && field.required) {
+        field.defaultValue = 'CURRENT_TIMESTAMP';
+      } else if (field.dbType === 'BOOLEAN') {
+        field.defaultValue = 'false';
+      }
+    }
+  }
+}
+
+// ---------- test cases (Phase E3) ----------
+
+function deriveTestCases(
+  input: ProjectInput,
+  entities: Entity[],
+  workflows: Workflow[]
+): TestCase[] {
+  const out: TestCase[] = [];
+  const entityById = new Map(entities.map((e) => [e.id, e]));
+
+  for (const wf of workflows) {
+    const primaryEntity = wf.entitiesTouched[0] ? entityById.get(wf.entitiesTouched[0]) : entities[0];
+    const sampleId = primaryEntity ? String((primaryEntity.sample as Record<string, unknown>)[Object.keys(primaryEntity.sample)[0]] || `${slug(primaryEntity.name)}-001`) : 'sample-001';
+    // Happy-path
+    out.push(
+      withProvenance(
+        {
+          workflowId: wf.id,
+          scenario: 'happy-path' as const,
+          given: `An authenticated ${primaryEntity?.name || 'record'} owner has the SAMPLE_DATA.md happy-path record loaded (\`${sampleId}\`).`,
+          when: `The actor runs ${wf.name} end-to-end as researched.`,
+          then: wf.acceptancePattern,
+          testDataRefs: [sampleId]
+        },
+        {
+          id: `test-${slug(wf.id)}-happy`,
+          origin: 'use-case' as const,
+          sources: [briefSourceRef(input, `Acceptance for ${wf.name}`)]
+        }
+      )
+    );
+    // One failure-mode test per researched failure mode
+    for (const fm of wf.failureModes) {
+      out.push(
+        withProvenance(
+          {
+            workflowId: wf.id,
+            scenario: 'failure-mode' as const,
+            given: `An authenticated ${primaryEntity?.name || 'record'} owner has SAMPLE_DATA.md negative-path record loaded for ${primaryEntity?.name || 'the entity'}, with the field that triggers "${fm.trigger}" set to the failing value.`,
+            when: `The actor attempts ${wf.name}.`,
+            then: `The system surfaces "${fm.trigger}" to the actor and applies the researched mitigation: ${fm.mitigation}. No silent state change.`,
+            testDataRefs: [`negative-${sampleId}`],
+            expectedFailureRef: fm.trigger
+          },
+          {
+            id: `test-${slug(wf.id)}-fail-${slug(fm.trigger).slice(0, 16)}`,
+            origin: 'domain' as const,
+            sources: [domainSourceRef(input, `Failure mode "${fm.trigger}" for ${wf.name}`)]
+          }
+        )
+      );
+    }
+    // Edge case: enum boundary on the primary entity (covers state-machine transitions)
+    if (primaryEntity) {
+      const enumField = primaryEntity.fields.find((f) => f.type === 'enum' && Array.isArray(f.enumValues) && f.enumValues.length > 1);
+      if (enumField) {
+        const lastValue = enumField.enumValues![enumField.enumValues!.length - 1];
+        out.push(
+          withProvenance(
+            {
+              workflowId: wf.id,
+              scenario: 'edge-case' as const,
+              given: `An authenticated owner has the SAMPLE_DATA.md variant record where ${primaryEntity.name}.${enumField.name} = "${lastValue}".`,
+              when: `The actor attempts ${wf.name} on a ${primaryEntity.name} already in state "${lastValue}".`,
+              then: `The system either advances the state machine according to research or refuses with a researched mitigation; behavior must be deterministic.`,
+              testDataRefs: [`variant-${sampleId}-${lastValue}`]
+            },
+            {
+              id: `test-${slug(wf.id)}-edge-${slug(enumField.name)}-${slug(lastValue)}`.slice(0, 60),
+              origin: 'domain' as const,
+              sources: [domainSourceRef(input, `Enum boundary on ${primaryEntity.name}.${enumField.name}`)]
+            }
+          )
+        );
+      }
+    }
+  }
+  return out;
+}
+
 function deriveUxFlow(screens: Screen[]): UxFlowEdge[] {
   const edges: UxFlowEdge[] = [];
   for (const s of screens) {
@@ -724,6 +881,8 @@ function deriveUxFlow(screens: Screen[]): UxFlowEdge[] {
 export function synthesizeExtractions(input: ProjectInput): ResearchExtractions {
   const actors = deriveActors(input);
   const entities = deriveEntities(input, actors);
+  // Phase E3: enrich entity fields with DB-level metadata (dbType, FK, indexes, defaults).
+  applyDbMetadata(entities);
   const workflows = deriveWorkflows(input, actors, entities);
   const integrations = deriveIntegrations(input);
   const risks = deriveRisks(input, actors, entities);
@@ -732,6 +891,7 @@ export function synthesizeExtractions(input: ProjectInput): ResearchExtractions 
   const conflicts = deriveConflicts();
   const screens = deriveScreens(input, actors, entities, workflows);
   const uxFlow = deriveUxFlow(screens);
+  const testCases = deriveTestCases(input, entities, workflows);
 
   const briefHash = crypto.createHash('sha256').update(JSON.stringify(input)).digest('hex');
   const meta: ResearchMeta = {
@@ -759,7 +919,8 @@ export function synthesizeExtractions(input: ProjectInput): ResearchExtractions 
     conflicts,
     removed: [],
     screens,
-    uxFlow
+    uxFlow,
+    testCases
   };
 }
 
@@ -822,6 +983,8 @@ export function writeSynthesizedToWorkspace(workspaceRoot: string, input: Projec
   // Phase E2: optional screens + uxFlow.
   writeJson(path.join(root, 'extracted', 'screens.json'), ex.screens ?? []);
   writeJson(path.join(root, 'extracted', 'uxFlow.json'), ex.uxFlow ?? []);
+  // Phase E3: optional test cases.
+  writeJson(path.join(root, 'extracted', 'testCases.json'), ex.testCases ?? []);
 }
 
 function main() {

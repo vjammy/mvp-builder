@@ -40,6 +40,25 @@ export type Actor = WithProvenance & {
   authMode?: 'authenticated' | 'magic-link' | 'kiosk' | 'public';
 };
 
+export type DbType =
+  | 'UUID'
+  | 'TEXT'
+  | 'INTEGER'
+  | 'DECIMAL'
+  | 'BOOLEAN'
+  | 'TIMESTAMPTZ'
+  | 'DATE'
+  | 'JSONB'
+  | 'ENUM';
+
+export type FkAction = 'CASCADE' | 'RESTRICT' | 'SET NULL' | 'NO ACTION';
+
+export type ForeignKey = {
+  entityId: string;
+  fieldName: string;
+  onDelete: FkAction;
+};
+
 export type EntityField = {
   name: string;
   type: 'string' | 'number' | 'boolean' | 'enum' | 'date' | 'json' | 'binary' | 'reference';
@@ -50,6 +69,13 @@ export type EntityField = {
   enumValues?: string[];
   references?: string;
   example: string;
+  /** Phase E3: DB-level metadata. Optional so existing extractions remain valid. */
+  dbType?: DbType;
+  nullable?: boolean;
+  defaultValue?: string;
+  indexed?: boolean;
+  unique?: boolean;
+  fk?: ForeignKey;
 };
 
 export type Entity = WithProvenance & {
@@ -221,6 +247,18 @@ export type Screen = WithProvenance & {
   navOut: ScreenNavRef[];
 };
 
+export type TestScenarioKind = 'happy-path' | 'edge-case' | 'failure-mode';
+
+export type TestCase = WithProvenance & {
+  workflowId: string;
+  scenario: TestScenarioKind;
+  given: string;
+  when: string;
+  then: string;
+  testDataRefs: string[];          // entity sample IDs referenced by this test
+  expectedFailureRef?: string;     // the workflow.failureModes[].trigger this case proves
+};
+
 export type UxFlowEdge = {
   fromScreen: string;          // screen id
   toScreen: string;            // screen id
@@ -284,6 +322,8 @@ export type ResearchExtractions = {
   screens?: Screen[];
   /** Phase E2: optional UX-flow edges between screens. Generated into ui-ux/UX_FLOW.md. */
   uxFlow?: UxFlowEdge[];
+  /** Phase E3: optional concrete test cases bound to workflow + sample data. */
+  testCases?: TestCase[];
 };
 
 // ---------- validators ----------
@@ -374,6 +414,21 @@ export function validateExtractions(data: unknown): ValidationIssue[] {
   const actorIds = new Set((d.actors ?? []).map((a) => a.id));
   const entityIds = new Set((d.entities ?? []).map((e) => e.id));
   const gateIds = new Set((d.gates ?? []).map((g) => g.id));
+
+  // Phase E3: optional test cases reference workflow IDs.
+  if (Array.isArray(d.testCases)) {
+    const wfIds = new Set((d.workflows ?? []).map((w) => w.id));
+    d.testCases.forEach((t, i) => {
+      validateProvenance(t as unknown as Record<string, unknown>, `testCases[${i}]`, issues);
+      pushIfBad(issues, wfIds.has(t.workflowId), `testCases[${i}].workflowId`, `unknown workflow "${t.workflowId}"`);
+      pushIfBad(
+        issues,
+        t.scenario === 'happy-path' || t.scenario === 'edge-case' || t.scenario === 'failure-mode',
+        `testCases[${i}].scenario`,
+        'must be happy-path|edge-case|failure-mode'
+      );
+    });
+  }
 
   // Phase E2: optional screens carry provenance and reference actor IDs.
   if (Array.isArray(d.screens)) {

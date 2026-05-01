@@ -32,6 +32,7 @@ research/
     workflows.json           (Workflow[])
     screens.json             (Screen[]) — Phase E2, optional
     uxFlow.json              (UxFlowEdge[]) — Phase E2, optional
+    testCases.json           (TestCase[]) — Phase E3, optional
     integrations.json        (Integration[])
     risks.json               (Risk[])
     gates.json               (Gate[])
@@ -140,10 +141,21 @@ For each entity:
 - `riskTypes[]`: high-level tags like `privacy`, `compliance`, `operational` — these get expanded in Pass 5.
 - `sample`: a realistic example record. The audit specifically flags `record-001`-style placeholders.
 
+**Phase E3 — DB-level metadata per field (optional but strongly preferred):**
+- `dbType`: `'UUID' | 'TEXT' | 'INTEGER' | 'DECIMAL' | 'BOOLEAN' | 'TIMESTAMPTZ' | 'DATE' | 'JSONB' | 'ENUM'`. The generator emits PostgreSQL-flavored DDL from these.
+- `nullable`: defaults to `!required` if omitted.
+- `defaultValue`: SQL default for the column (`'CURRENT_TIMESTAMP'`, `'false'`, an enum value, etc.).
+- `indexed`: `true` if the column carries an index (id-like, foreign keys, status fields).
+- `unique`: `true` for primary keys, email-like, etc.
+- `fk`: `{ entityId, fieldName, onDelete: 'CASCADE'|'RESTRICT'|'SET NULL'|'NO ACTION' }`. Required when the field references another entity.
+
+When `dbType` is present on enough fields, the generator emits `architecture/DATABASE_SCHEMA.sql` (executable PostgreSQL DDL) and `architecture/DATABASE_SCHEMA.md` (human-readable companion).
+
 **Validation rules:**
 - ≥ 3 entities. Two entities almost never represent a workable product.
 - Every entity owner references a known actor ID.
 - `sample` keys match `fields[].name` exactly.
+- If `fk` is set, `entityId` must reference an entity in this `entities.json`.
 
 ### Pass 4: Workflows → `workflows.json`
 
@@ -249,6 +261,31 @@ For anti-features (deliberately out of scope):
 These narratives don't drive generation directly but help reviewers verify your extraction quality. The audit consumes the JSON; humans read the markdown.
 
 ---
+
+### Pass 8.5: Test cases → `testCases.json` (Phase E3)
+
+**Goal:** concrete Given/When/Then test cases bound to workflows and to `SAMPLE_DATA.md` records. The generator emits `phases/<slug>/TEST_CASES.md` per phase from this file.
+
+For each workflow produce at minimum:
+- 1 `happy-path` case using the entity's happy-path sample record.
+- 1 `failure-mode` case **per researched failure mode**, referencing the negative-path sample. Set `expectedFailureRef` to the matching `failureModes[].trigger` string.
+- 1–2 `edge-case` cases covering enum/state-machine boundaries when the entity has enum fields with multiple values.
+
+Each case carries:
+- `workflowId`: must reference a workflow in `workflows.json`.
+- `scenario`: `'happy-path' | 'edge-case' | 'failure-mode'`.
+- `given`: starting state, naming the actor and the sample record.
+- `when`: the action being exercised (matches `workflow.steps[].action` or the workflow as a whole).
+- `then`: the expected post-state, matching `workflow.acceptancePattern` or the failure mitigation.
+- `testDataRefs[]`: sample record IDs from `entity.sample`. Use `negative-<id>` for negative-path and `variant-<id>-<enumValue>` for variant samples.
+- `expectedFailureRef?`: when `scenario === 'failure-mode'`, the trigger string this test proves the system handles.
+
+**Validation rules:**
+- Every researched `failureModes[]` entry has at least one matching test case.
+- Every workflow has at least one `happy-path` case.
+- `testDataRefs[]` is never empty for happy-path or failure-mode cases.
+
+The audit dimension `test-case-grounding` (max 10) scores ref grounding, failure-mode coverage, and per-workflow happy-path presence.
 
 ## Phase 3 — Consolidation (1 pass)
 

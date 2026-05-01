@@ -34,6 +34,8 @@ import { renderPermissionMatrixMarkdown } from './generator/permission-matrix';
 import { renderRegulatoryNotesMarkdown } from './generator/regulatory-notes';
 import { renderAllScreenSpecs, renderScreenInventoryMarkdown } from './generator/screen-specs';
 import { renderUxFlowMarkdown } from './generator/ux-flow';
+import { renderDatabaseSchemaMarkdown, renderDatabaseSchemaSql } from './generator/database-schema';
+import { renderPhaseTestCasesMarkdown } from './generator/test-cases';
 import { buildQuestionPrompts, CORE_AGENT_OPERATING_RULES, getProfileConfig, slugify } from './templates';
 import {
   buildDomainOntology,
@@ -2249,9 +2251,13 @@ ${sampleJson}
 \`\`\``;
   };
 
+  const hasDbMetadata = ex.entities.some((e) => e.fields.some((f) => f.dbType));
+  const ddlLink = hasDbMetadata
+    ? '\n\n> **Companion files**: this narrative is paired with `architecture/DATABASE_SCHEMA.md` (table summaries) and `architecture/DATABASE_SCHEMA.sql` (executable PostgreSQL DDL). Use the DDL to bootstrap the database; come back here for the why behind each entity.'
+    : '';
   return `# DATA_MODEL
 
-> Generated from research extractions. Each entity below maps to one record in \`research/extracted/entities.json\`. Field-level types, owners, references, and risks are surfaced from the same source so downstream artifacts (SAMPLE_DATA.md, ACCEPTANCE_CRITERIA.md, phase TEST_SCRIPT.md) reuse the same vocabulary.
+> Generated from research extractions. Each entity below maps to one record in \`research/extracted/entities.json\`. Field-level types, owners, references, and risks are surfaced from the same source so downstream artifacts (SAMPLE_DATA.md, ACCEPTANCE_CRITERIA.md, phase TEST_SCRIPT.md) reuse the same vocabulary.${ddlLink}
 
 ## Entities
 
@@ -9289,6 +9295,12 @@ function createGeneratedFiles(bundle: ProjectBundle, input: ProjectInput, contex
         add(file.path, file.content);
       }
     }
+    // Phase E3: full DDL + readable schema doc when entity fields carry dbType metadata.
+    const hasDbMetadata = context.extractions.entities.some((e) => e.fields.some((f) => f.dbType));
+    if (hasDbMetadata) {
+      add('architecture/DATABASE_SCHEMA.md', renderDatabaseSchemaMarkdown(context.extractions));
+      add('architecture/DATABASE_SCHEMA.sql', renderDatabaseSchemaSql(context.extractions));
+    }
   }
   add('requirements/OPEN_QUESTIONS.md', buildOpenQuestions(input, context));
   add('requirements/REQUIREMENTS_RISK_REVIEW.md', buildRequirementsRiskReview(input, context));
@@ -9668,6 +9680,10 @@ ${listToBullets(bundle.unresolvedWarnings.map((warning) => `[${warning.severity}
     add(`phases/${phase.slug}/EVIDENCE_CHECKLIST.md`, buildEvidenceChecklist(phase, input));
     add(`phases/${phase.slug}/EXIT_GATE.md`, buildPhaseExitGate(phase, context));
     add(`phases/${phase.slug}/TEST_PLAN.md`, buildPhaseTestPlan(phase, input, context));
+    // Phase E3: emit grounded TEST_CASES.md per phase when research has test cases.
+    if (context.extractions?.testCases && context.extractions.testCases.length) {
+      add(`phases/${phase.slug}/TEST_CASES.md`, renderPhaseTestCasesMarkdown(phase, context.extractions));
+    }
     add(`phases/${phase.slug}/TEST_SCRIPT.md`, buildPhaseTestScript(phase, input, context));
     add(`phases/${phase.slug}/TEST_RESULTS.md`, buildPhaseTestResults(phase));
     add(`phases/${phase.slug}/HANDOFF_SUMMARY.md`, buildPhaseHandoffSummary(phase, input, context));
