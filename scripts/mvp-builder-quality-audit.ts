@@ -40,6 +40,14 @@ type DimensionScore = {
   evidence: string[];
 };
 
+type ExpertScore = {
+  name: string;
+  score: number;
+  max: number;
+  evidence: string[];
+  cap?: { applied: number; reason: string }; // when this dim caps the total
+};
+
 type AuditResult = {
   packageRoot: string;
   productName: string;
@@ -48,6 +56,12 @@ type AuditResult = {
   researchGrounded: boolean;
   dimensions: DimensionScore[];
   topFindings: Finding[];
+  expert?: {
+    bonus: number;
+    cap: number; // strongest cap applied
+    dimensions: ExpertScore[];
+    capReasons: string[];
+  };
 };
 
 function getArg(name: string): string | undefined {
@@ -657,6 +671,351 @@ function auditConsistency(packageRoot: string, productName: string): DimensionSc
   return { name: 'consistency', score: Math.min(10, score), max: 10, weight: 10, findings, evidence };
 }
 
+// ---------- Phase D: expert rubric ----------
+//
+// Five deterministic dimensions that score actual research depth, role
+// boundaries, regulatory mapping, and sample data realism. Each dimension
+// awards 0-N bonus points OR applies a TOTAL CAP when expert content is
+// shallow despite research being present.
+//
+// Caps trump bonuses. If multiple caps apply, the strongest one wins.
+//
+// Designed so:
+//   - workspaces with rich research that artifacts consume → +5..+8 bonus
+//   - workspaces with research that artifacts ignore → caps pull total down
+//   - workspaces without research are unaffected (expert dims are skipped)
+
+const GENERIC_FAILURE_TRIGGERS = [
+  'invalid input',
+  'invalid data',
+  'user error',
+  'validation error',
+  'system error',
+  'something goes wrong',
+  'error occurs'
+];
+
+type ResearchExtractsLite = {
+  actors: Array<{ id: string; name: string; visibility: string[] }>;
+  entities: Array<{
+    id: string;
+    name: string;
+    fields: Array<{ name: string; pii?: boolean; sensitive?: boolean; example?: unknown }>;
+    sample: Record<string, unknown>;
+    ownerActors: string[];
+  }>;
+  workflows: Array<{
+    name: string;
+    steps: Array<{ branchOn?: string }>;
+    failureModes: Array<{ trigger: string; effect: string; mitigation: string }>;
+  }>;
+  risks: Array<{ category: string; description: string; mitigation: string; affectedEntities: string[] }>;
+  gates: Array<{ name: string; mandatedBy: string; mandatedByDetail?: string; evidenceRequired: string[] }>;
+  antiFeatures: Array<{ description: string }>;
+};
+
+function loadExtracts(packageRoot: string): ResearchExtractsLite | undefined {
+  const root = path.join(packageRoot, 'research', 'extracted');
+  if (!fs.existsSync(path.join(root, 'meta.json'))) return undefined;
+  const safe = (name: string): unknown => {
+    try {
+      return JSON.parse(fs.readFileSync(path.join(root, name), 'utf8'));
+    } catch {
+      return undefined;
+    }
+  };
+  return {
+    actors: (safe('actors.json') as ResearchExtractsLite['actors']) || [],
+    entities: (safe('entities.json') as ResearchExtractsLite['entities']) || [],
+    workflows: (safe('workflows.json') as ResearchExtractsLite['workflows']) || [],
+    risks: (safe('risks.json') as ResearchExtractsLite['risks']) || [],
+    gates: (safe('gates.json') as ResearchExtractsLite['gates']) || [],
+    antiFeatures: (safe('antiFeatures.json') as ResearchExtractsLite['antiFeatures']) || []
+  };
+}
+
+// E1. research-depth (max +2 bonus, cap=85 when score < 4/10)
+function expertResearchDepth(ex: ResearchExtractsLite): ExpertScore {
+  const evidence: string[] = [];
+  let score = 0;
+  if (ex.entities.length >= 3) {
+    score += 1;
+    evidence.push(`entities: ${ex.entities.length} (≥3)`);
+  } else {
+    evidence.push(`entities: ${ex.entities.length} (need ≥3)`);
+  }
+  if (ex.actors.length >= 2) {
+    score += 1;
+    evidence.push(`actors: ${ex.actors.length} (≥2)`);
+  }
+  if (ex.workflows.length >= 3) {
+    score += 1;
+    evidence.push(`workflows: ${ex.workflows.length} (≥3)`);
+  }
+  // Workflow step depth: each workflow ≥5 steps
+  const deepWorkflows = ex.workflows.filter((w) => w.steps.length >= 5).length;
+  if (deepWorkflows >= ex.workflows.length && ex.workflows.length > 0) {
+    score += 2;
+    evidence.push(`all ${ex.workflows.length} workflows have ≥5 steps`);
+  } else {
+    evidence.push(`only ${deepWorkflows}/${ex.workflows.length} workflows have ≥5 steps`);
+    score += Math.max(0, Math.round((deepWorkflows / Math.max(1, ex.workflows.length)) * 2));
+  }
+  // Decision points: ≥1 step in any workflow has branchOn
+  const branchPoints = ex.workflows.reduce(
+    (sum, w) => sum + w.steps.filter((s) => s.branchOn && s.branchOn.trim().length > 0).length,
+    0
+  );
+  if (branchPoints >= 2) {
+    score += 1;
+    evidence.push(`workflow decision points (branchOn): ${branchPoints} (≥2)`);
+  } else {
+    evidence.push(`workflow decision points (branchOn): ${branchPoints} (need ≥2)`);
+  }
+  // Failure modes per workflow
+  const wfWithFm = ex.workflows.filter((w) => w.failureModes && w.failureModes.length >= 2).length;
+  if (wfWithFm >= ex.workflows.length && ex.workflows.length > 0) {
+    score += 2;
+    evidence.push(`all ${ex.workflows.length} workflows have ≥2 failure modes`);
+  } else {
+    score += Math.max(0, Math.round((wfWithFm / Math.max(1, ex.workflows.length)) * 2));
+    evidence.push(`only ${wfWithFm}/${ex.workflows.length} workflows have ≥2 failure modes`);
+  }
+  // PII/sensitive fields tagged on at least one entity
+  const piiTagged = ex.entities.some((e) => e.fields.some((f) => f.pii || f.sensitive));
+  if (piiTagged) {
+    score += 1;
+    evidence.push('at least one entity has pii/sensitive field tagged');
+  } else {
+    evidence.push('no entity has pii/sensitive field tagged');
+  }
+  // Cap: if score < 4/10, cap total at 85 (production-ready boundary)
+  const cap = score < 4 ? { applied: 85, reason: `research depth ${score}/10 — too shallow for production-ready` } : undefined;
+  return { name: 'research-depth', score: Math.min(10, score), max: 10, evidence, cap };
+}
+
+// E2. edge-case-coverage (max +2 bonus, cap=86 when generic-failure-mode rate ≥40%)
+function expertEdgeCaseCoverage(ex: ResearchExtractsLite, packageRoot: string): ExpertScore {
+  const evidence: string[] = [];
+  let score = 0;
+  const allTriggers = ex.workflows.flatMap((w) => (w.failureModes || []).map((f) => f.trigger.toLowerCase()));
+  const generic = allTriggers.filter((t) => GENERIC_FAILURE_TRIGGERS.some((g) => t.includes(g))).length;
+  const total = allTriggers.length;
+  const genericRate = total ? generic / total : 1;
+  evidence.push(`workflow failure-mode triggers: ${total}, generic phrases: ${generic} (${(genericRate * 100).toFixed(0)}%)`);
+  if (total > 0 && genericRate < 0.1) {
+    score += 4;
+    evidence.push('failure modes are concrete and domain-specific');
+  } else if (total > 0 && genericRate < 0.4) {
+    score += 2;
+    evidence.push('most failure modes are concrete');
+  }
+  // Each REQ in FUNCTIONAL_REQUIREMENTS has a Failure case naming a specific scenario
+  const reqContent = readSafe(path.join(packageRoot, 'requirements/FUNCTIONAL_REQUIREMENTS.md'));
+  const reqBlocks = reqContent.match(/##\s+Requirement\s+\d+:[\s\S]*?(?=##\s+Requirement\s+\d+:|$)/g) || [];
+  const reqsWithFailure = reqBlocks.filter((r) => /Failure case|Failure handling/.test(r)).length;
+  if (reqBlocks.length > 0 && reqsWithFailure / reqBlocks.length >= 0.9) {
+    score += 3;
+    evidence.push(`${reqsWithFailure}/${reqBlocks.length} REQs name a failure case`);
+  } else {
+    evidence.push(`only ${reqsWithFailure}/${reqBlocks.length} REQs name a failure case`);
+    score += Math.round((reqsWithFailure / Math.max(1, reqBlocks.length)) * 3);
+  }
+  // ≥1 failure mode references a regulatory concern
+  const refsRegulation = ex.workflows.some((w) =>
+    (w.failureModes || []).some((f) => /\b(GDPR|CAN-SPAM|HIPAA|CPRA|CCPA|FERPA|PCI|TCPA|CASL|COPPA|opt-out|consent|audit|reputation|sender)\b/i.test(`${f.trigger} ${f.effect} ${f.mitigation}`))
+  );
+  if (refsRegulation) {
+    score += 3;
+    evidence.push('at least one failure mode references a regulatory or systemic concern');
+  } else {
+    evidence.push('no failure mode references a regulatory or systemic concern');
+  }
+  const cap = total > 3 && genericRate >= 0.4 ? { applied: 86, reason: `${(genericRate * 100).toFixed(0)}% of failure-mode triggers are generic ("invalid input", "user error", etc.)` } : undefined;
+  return { name: 'edge-case-coverage', score: Math.min(10, score), max: 10, evidence, cap };
+}
+
+// E3. role-permission-matrix (max +2 bonus, cap=87 when actors > 1 and matrix missing/weak)
+function expertPermissionMatrix(ex: ResearchExtractsLite, packageRoot: string): ExpertScore {
+  const evidence: string[] = [];
+  let score = 0;
+  const filePath = path.join(packageRoot, 'requirements/PERMISSION_MATRIX.md');
+  const content = readSafe(filePath);
+  const fileExists = content.length > 0;
+  if (fileExists) {
+    score += 2;
+    evidence.push('requirements/PERMISSION_MATRIX.md exists');
+  } else {
+    evidence.push('requirements/PERMISSION_MATRIX.md missing');
+  }
+  // Cell coverage: count grid cells (rows × cols) and ensure ≥80% are populated with non-blank values.
+  let totalCells = 0;
+  let filledCells = 0;
+  const denyCount = (content.match(/\bDENY\b/g) || []).length;
+  if (fileExists) {
+    const rows = content.match(/^\|\s+\*\*[^|]+\*\*[^\n]*$/gm) || [];
+    for (const row of rows) {
+      const cells = row.split('|').slice(2, -1).map((c) => c.trim());
+      totalCells += cells.length;
+      filledCells += cells.filter((c) => c.length > 0 && c !== '—').length;
+    }
+    const fillRate = totalCells ? filledCells / totalCells : 0;
+    evidence.push(`grid coverage: ${filledCells}/${totalCells} cells filled (${(fillRate * 100).toFixed(0)}%)`);
+    if (fillRate >= 0.95) score += 4;
+    else if (fillRate >= 0.8) score += 3;
+    else if (fillRate >= 0.5) score += 1;
+    if (denyCount >= 1) {
+      score += 2;
+      evidence.push(`${denyCount} DENY cells (boundary enforcement is explicit)`);
+    } else {
+      evidence.push('no DENY cells (cannot tell if role boundaries are enforced)');
+    }
+    // ≥3 actors and ≥3 entities means the matrix is meaningful
+    if (ex.actors.length >= 3 && ex.entities.length >= 3) {
+      score += 2;
+      evidence.push(`${ex.actors.length} actors × ${ex.entities.length} entities is meaningful coverage`);
+    }
+  }
+  const cap = ex.actors.length > 1 && (!fileExists || filledCells === 0)
+    ? { applied: 87, reason: 'multiple actors but no permission matrix' }
+    : ex.actors.length > 1 && denyCount === 0 && fileExists
+      ? { applied: 88, reason: 'permission matrix has no DENY cells (role boundaries not enforced)' }
+      : undefined;
+  return { name: 'role-permission-matrix', score: Math.min(10, score), max: 10, evidence, cap };
+}
+
+// E4. regulatory-mapping (max +1 bonus, cap=87 when citations exist in research but absent from artifacts)
+function expertRegulatoryMapping(ex: ResearchExtractsLite, packageRoot: string): ExpertScore {
+  const evidence: string[] = [];
+  const score = (() => {
+    const allCitations = new Set<string>();
+    const citationRe = /\b(GDPR(?:\s+Art\.?\s*\d+)?|CAN-SPAM|HIPAA|CPRA|CCPA|FERPA|PCI(?:\s+DSS)?|SOC\s*2|TCPA|CASL|COPPA)\b/gi;
+    for (const g of ex.gates) {
+      const text = `${g.name} ${g.mandatedByDetail || ''}`;
+      const m = text.match(citationRe) || [];
+      m.forEach((c) => allCitations.add(c.trim()));
+    }
+    for (const r of ex.risks) {
+      const text = `${r.description} ${r.mitigation}`;
+      const m = text.match(citationRe) || [];
+      m.forEach((c) => allCitations.add(c.trim()));
+    }
+    if (allCitations.size === 0) {
+      evidence.push('no regulatory citations in research — regulatory mapping skipped');
+      return 5; // full credit when no regulation applies (e.g. internal tool)
+    }
+    evidence.push(`research has ${allCitations.size} regulatory citations`);
+    let s = 0;
+    // (a) requirements/REGULATORY_NOTES.md exists and contains the citations
+    const regNotes = readSafe(path.join(packageRoot, 'requirements/REGULATORY_NOTES.md'));
+    if (regNotes) {
+      s += 1;
+      const present = Array.from(allCitations).filter((c) => regNotes.toLowerCase().includes(c.toLowerCase()));
+      evidence.push(`REGULATORY_NOTES present, contains ${present.length}/${allCitations.size} citations`);
+      if (present.length / allCitations.size >= 0.8) s += 2;
+      else if (present.length / allCitations.size >= 0.5) s += 1;
+    } else {
+      evidence.push('REGULATORY_NOTES missing');
+    }
+    // (b) at least 1 citation appears in security-risk docs
+    const securityDocs = listFiles(path.join(packageRoot, 'security-risk'))
+      .filter((p) => p.endsWith('.md'))
+      .map((p) => readSafe(p))
+      .join('\n');
+    const inSecurity = Array.from(allCitations).some((c) => securityDocs.toLowerCase().includes(c.toLowerCase()));
+    if (inSecurity) {
+      s += 1;
+      evidence.push('citations appear in security-risk/ docs');
+    } else {
+      evidence.push('citations missing from security-risk/ docs');
+    }
+    // (c) at least 1 citation appears in TEST_SCRIPT.md somewhere
+    const phasesDir = path.join(packageRoot, 'phases');
+    const testScripts = listFiles(phasesDir)
+      .filter((p) => fs.statSync(p).isDirectory())
+      .map((p) => readSafe(path.join(p, 'TEST_SCRIPT.md')))
+      .join('\n');
+    const inTests = Array.from(allCitations).some((c) => testScripts.toLowerCase().includes(c.toLowerCase()));
+    if (inTests) {
+      s += 1;
+      evidence.push('citations appear in at least one phase TEST_SCRIPT.md');
+    } else {
+      evidence.push('citations missing from all phase TEST_SCRIPT.md files');
+    }
+    return Math.min(5, s);
+  })();
+  const cap = score < 2
+    ? { applied: 87, reason: 'regulatory citations exist in research but are not surfaced in workspace artifacts' }
+    : undefined;
+  return { name: 'regulatory-mapping', score, max: 5, evidence, cap };
+}
+
+// E5. realistic-sample-data (max +1 bonus, cap=88 when sample IDs are placeholder-ish)
+function expertRealisticSampleData(ex: ResearchExtractsLite): ExpertScore {
+  const evidence: string[] = [];
+  let score = 0;
+  // Examine entity samples for ID-like fields. Acceptable: domain-prefixed
+  // (e.g. "acct-acme-001", "MRN-484823", "lead-acme-jordan-001"). Generic:
+  // "record-001", "entity-001", "id-001", short numeric, etc.
+  let totalIds = 0;
+  let domainConventional = 0;
+  for (const e of ex.entities) {
+    const sample = e.sample as Record<string, unknown>;
+    for (const [key, val] of Object.entries(sample || {})) {
+      if (typeof val !== 'string') continue;
+      if (!/id$|Id$|ref$/i.test(key)) continue;
+      totalIds += 1;
+      const isGeneric = /^(record|entity|item|user|audit|object)-\d{1,4}$/i.test(val) || /^id-\d+$/i.test(val);
+      const isDomain = /^[a-z]{2,}-[a-z0-9-]{3,}$/i.test(val) && !isGeneric;
+      if (isDomain) domainConventional += 1;
+    }
+  }
+  evidence.push(`entity-sample IDs: ${totalIds}, domain-conventional: ${domainConventional}`);
+  if (totalIds > 0) {
+    const ratio = domainConventional / totalIds;
+    if (ratio >= 0.9) score += 5;
+    else if (ratio >= 0.6) score += 3;
+    else if (ratio >= 0.3) score += 1;
+  }
+  // Cap: when research has entities but sample IDs are mostly generic
+  const cap = totalIds >= 3 && domainConventional / totalIds < 0.3
+    ? { applied: 88, reason: `${domainConventional}/${totalIds} entity sample IDs follow domain conventions (need ≥30%)` }
+    : undefined;
+  return { name: 'realistic-sample-data', score: Math.min(5, score), max: 5, evidence, cap };
+}
+
+function evaluateExpertRubric(packageRoot: string): NonNullable<AuditResult['expert']> | undefined {
+  const ex = loadExtracts(packageRoot);
+  if (!ex) return undefined;
+
+  const dims = [
+    expertResearchDepth(ex),
+    expertEdgeCaseCoverage(ex, packageRoot),
+    expertPermissionMatrix(ex, packageRoot),
+    expertRegulatoryMapping(ex, packageRoot),
+    expertRealisticSampleData(ex)
+  ];
+
+  // Bonus: bonus = round(rawTotal / sumMax × 8). 8-point ceiling because 92 base + 8 = 100.
+  const rawTotal = dims.reduce((s, d) => s + d.score, 0);
+  const sumMax = dims.reduce((s, d) => s + d.max, 0);
+  const bonus = sumMax ? Math.round((rawTotal / sumMax) * 8) : 0;
+
+  // Cap: take the strongest cap (lowest applied total) among all dims.
+  const caps = dims.map((d) => d.cap).filter((c): c is { applied: number; reason: string } => Boolean(c));
+  const strongestCap = caps.reduce<{ applied: number; reason: string } | undefined>(
+    (acc, c) => (acc === undefined || c.applied < acc.applied ? c : acc),
+    undefined
+  );
+
+  return {
+    bonus,
+    cap: strongestCap?.applied ?? 100,
+    dimensions: dims,
+    capReasons: caps.map((c) => `cap ${c.applied}: ${c.reason}`)
+  };
+}
+
 function detectResearchGrounded(packageRoot: string): boolean {
   const reqContent = readSafe(path.join(packageRoot, 'requirements/FUNCTIONAL_REQUIREMENTS.md'));
   return !/Generated WITHOUT research extractions/i.test(reqContent);
@@ -689,8 +1048,22 @@ export function runAudit(packageRoot: string): AuditResult {
   let total = dimensions.reduce((sum, d) => sum + d.score, 0);
   const researchGrounded = detectResearchGrounded(packageRoot);
   if (!researchGrounded) total = Math.max(0, total - 5);
+
+  // Phase D: layer the expert rubric. Bonus is added to total (capped at 100);
+  // expert caps then pull total down if any expert dim found shallow content.
+  const expert = evaluateExpertRubric(packageRoot);
+  if (expert) {
+    total = Math.min(100, total + expert.bonus);
+    if (expert.cap < 100) total = Math.min(total, expert.cap);
+  }
+
   const allFindings = dimensions.flatMap((d) => d.findings);
+  // Surface expert caps as top findings so they're visible in the rendered report.
+  const expertCapFindings: Finding[] = expert
+    ? expert.capReasons.map((reason) => ({ dimension: 'expert-rubric', severity: 'blocker', message: reason }))
+    : [];
   const topFindings = [
+    ...expertCapFindings,
     ...allFindings.filter((f) => f.severity === 'blocker'),
     ...allFindings.filter((f) => f.severity === 'warning')
   ].slice(0, 12);
@@ -701,7 +1074,8 @@ export function runAudit(packageRoot: string): AuditResult {
     rating: rate(total),
     researchGrounded,
     dimensions,
-    topFindings
+    topFindings,
+    expert
   };
 }
 
@@ -720,6 +1094,18 @@ export function renderAudit(result: AuditResult): string {
     lines.push(`| ${d.name} | ${d.score} | ${d.max} |`);
   }
   lines.push('');
+  if (result.expert) {
+    lines.push('## Expert rubric (Phase D)');
+    lines.push(`- Bonus applied: +${result.expert.bonus} (max +8)`);
+    lines.push(`- Cap applied: ${result.expert.cap === 100 ? 'none' : `${result.expert.cap}`}`);
+    lines.push('');
+    lines.push('| Dimension | Score | Max |');
+    lines.push('| --- | ---: | ---: |');
+    for (const e of result.expert.dimensions) {
+      lines.push(`| ${e.name} | ${e.score} | ${e.max} |`);
+    }
+    lines.push('');
+  }
   if (result.topFindings.length) {
     lines.push('## Top findings');
     for (const f of result.topFindings) {
@@ -734,6 +1120,12 @@ export function renderAudit(result: AuditResult): string {
   for (const d of result.dimensions) {
     lines.push(`### ${d.name}`);
     d.evidence.forEach((e) => lines.push(`- ${e}`));
+  }
+  if (result.expert) {
+    for (const e of result.expert.dimensions) {
+      lines.push(`### expert.${e.name}`);
+      e.evidence.forEach((ev) => lines.push(`- ${ev}`));
+    }
   }
   return lines.join('\n') + '\n';
 }

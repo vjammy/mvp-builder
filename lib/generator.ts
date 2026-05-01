@@ -8,6 +8,8 @@ import {
   selectPhaseRelevant,
   type ResearchTokenPack
 } from './generator/research-token-pack';
+import { renderPermissionMatrixMarkdown } from './generator/permission-matrix';
+import { renderRegulatoryNotesMarkdown } from './generator/regulatory-notes';
 import { buildQuestionPrompts, CORE_AGENT_OPERATING_RULES, getProfileConfig, slugify } from './templates';
 import {
   buildDomainOntology,
@@ -9065,6 +9067,13 @@ function createGeneratedFiles(bundle: ProjectBundle, input: ProjectInput, contex
   add('requirements/NON_FUNCTIONAL_REQUIREMENTS.md', buildNonFunctionalRequirements(input, context));
   add('requirements/ACCEPTANCE_CRITERIA.md', buildAcceptanceCriteria(input, context, bundle.phases));
   add('SAMPLE_DATA.md', buildSampleData(input, context, bundle.phases));
+  // Phase D: emit research-driven matrix and regulatory notes when extractions
+  // are present. Audit's expert dimensions (role-permission-matrix and
+  // regulatory-mapping) score these directly.
+  if (context.extractions) {
+    add('requirements/PERMISSION_MATRIX.md', renderPermissionMatrixMarkdown(context.extractions));
+    add('requirements/REGULATORY_NOTES.md', renderRegulatoryNotesMarkdown(context.extractions));
+  }
   add('requirements/OPEN_QUESTIONS.md', buildOpenQuestions(input, context));
   add('requirements/REQUIREMENTS_RISK_REVIEW.md', buildRequirementsRiskReview(input, context));
   add('requirements/REQUIREMENTS_GATE.md', buildRequirementsGate());
