@@ -892,7 +892,20 @@ function buildContext(input: ProjectInput, extractions?: ResearchExtractions): P
   const answers = input.questionnaireAnswers;
   const keywords = extractKeywords(input);
   const riskFlags = detectRiskFlags(input);
-  const archetypeDetection = detectArchetype(input);
+  // Phase A3b: when research extractions are present, the keyword-router-based
+  // archetype decision becomes irrelevant. Pin it to 'general' so the archetype-
+  // specific code paths (quality checks, domain ontology fallbacks) don't fire
+  // on outputs the research path is already producing. The keyword router stays
+  // alive only for the deprecated --allow-templated path until A3c.
+  const archetypeDetection: ArchetypeDetection = extractions
+    ? {
+        archetype: 'general',
+        confidence: 1,
+        candidateScores: [],
+        method: 'fallback',
+        rationale: 'Pinned to general because research extractions are present (A3b).'
+      }
+    : detectArchetype(input);
   const domainArchetype = archetypeDetection.archetype;
   const domainSignals = getDomainSignals(input, riskFlags);
   const uiRelevant = detectUiRelevance(input, domainArchetype);
