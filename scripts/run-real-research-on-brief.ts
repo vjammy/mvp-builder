@@ -24,6 +24,7 @@ import { runResearchLoop } from '../lib/research/loop';
 import { loadAnthropicProvider } from '../lib/research/providers';
 import { writeResearchToWorkspace } from '../lib/research/persistence';
 import { validateExtractions } from '../lib/research/schema';
+import { buildAuditExitCallback } from '../lib/research/audit-exit-runner';
 
 function getArg(name: string): string | undefined {
   const exact = process.argv.find((a) => a.startsWith(`--${name}=`));
@@ -35,9 +36,13 @@ async function main() {
   const outArg = getArg('out');
   const maxPasses = Number(getArg('max-passes') || '4');
   const tokenCap = Number(getArg('token-cap') || '200000');
+  const auditThresholdArg = getArg('audit-threshold');
+  const auditThreshold = auditThresholdArg ? Number(auditThresholdArg) : undefined;
+  const auditMaxRetries = Number(getArg('audit-max-retries') || '2');
+  const respectCaps = (getArg('respect-caps') || 'true').toLowerCase() !== 'false';
 
   if (!inputArg || !outArg) {
-    console.error('Usage: tsx scripts/run-real-research-on-brief.ts --input=brief.json --out=<dir> [--max-passes=4] [--token-cap=200000]');
+    console.error('Usage: tsx scripts/run-real-research-on-brief.ts --input=brief.json --out=<dir> [--max-passes=4] [--token-cap=200000] [--audit-threshold=95] [--audit-max-retries=2] [--respect-caps=true]');
     process.exit(1);
   }
 
@@ -48,10 +53,22 @@ async function main() {
   console.log(`[A4] Loading Anthropic provider…`);
   const provider = await loadAnthropicProvider({ model: 'claude-sonnet-4-6' });
 
+  const auditExit = auditThreshold
+    ? { ...buildAuditExitCallback({ brief, threshold: auditThreshold, respectCaps }), maxRetries: auditMaxRetries }
+    : undefined;
+  if (auditExit) {
+    console.log(`[A4] Audit-exit: threshold=${auditThreshold}, respectCaps=${respectCaps}, maxRetries=${auditMaxRetries}`);
+  }
+
   console.log(`[A4] Running research loop on "${brief.productName}" (max-passes=${maxPasses}, token-cap=${tokenCap.toLocaleString()})…`);
   const startedAt = Date.now();
-  const result = await runResearchLoop({ brief, provider, maxPasses, maxTotalTokens: tokenCap });
+  const result = await runResearchLoop({ brief, provider, maxPasses, maxTotalTokens: tokenCap, auditExit });
   const elapsedMs = Date.now() - startedAt;
+  if (result.auditExit) {
+    console.log(
+      `[A4] Audit-exit final: total=${result.auditExit.finalAudit.total}, cap=${result.auditExit.finalAudit.capApplied}, retries=${result.auditExit.retries}, passed=${result.auditExit.passed}`
+    );
+  }
 
   console.log(`[A4] Loop finished in ${(elapsedMs / 1000).toFixed(1)}s. tokens=${result.totalTokensUsed.toLocaleString()}.`);
 

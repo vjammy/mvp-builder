@@ -50,6 +50,38 @@ export type LoopResult = {
   domain: TopicResult;
   extractions: ResearchExtractions;
   totalTokensUsed: number;
+  /** Set when auditExit was configured. Records the final audit + retry attempts. */
+  auditExit?: AuditExitOutcome;
+};
+
+/**
+ * Result of running the audit callback on a candidate extraction.
+ * Designed to mirror the `mvp-builder-quality-audit.ts` AuditResult shape
+ * but re-declared here so lib/research/ doesn't depend on scripts/.
+ */
+export type AuditExitResult = {
+  total: number;
+  /** 100 when no expert cap applied; lower otherwise. */
+  capApplied: number;
+  capReasons: string[];
+  topFindings: Array<{ severity: 'blocker' | 'warning' | 'info'; dimension: string; message: string }>;
+};
+
+export type AuditExitConfig = {
+  /** Audit total must be >= threshold to count as passing. */
+  threshold: number;
+  /** When true, any expert cap < 100 also fails (cap reasons become retry gaps). */
+  respectCaps: boolean;
+  /** Number of retry attempts before giving up. Default 2. */
+  maxRetries?: number;
+  /** The actual audit run. Caller wires this to create-project + runAudit. */
+  run: (extractions: ResearchExtractions) => Promise<AuditExitResult>;
+};
+
+export type AuditExitOutcome = {
+  finalAudit: AuditExitResult;
+  retries: number;
+  passed: boolean;
 };
 
 export function hashBrief(brief: ProjectInput): string {
@@ -154,6 +186,8 @@ export async function runResearchLoop(args: {
   provider: ResearchProvider;
   maxPasses?: number;
   maxTotalTokens?: number;
+  /** When provided, gates loop completion on the audit result. See AuditExitConfig. */
+  auditExit?: AuditExitConfig;
 }): Promise<LoopResult> {
   const startedAt = new Date().toISOString();
   const briefHash = hashBrief(args.brief);
@@ -172,24 +206,78 @@ export async function runResearchLoop(args: {
     useCase.passes.reduce((s, p) => s + p.tokensUsed, 0) +
     domain.passes.reduce((s, p) => s + p.tokensUsed, 0);
 
-  // Produce structured extractions from the converged narratives.
-  const extractionRun = await args.provider.runExtraction({
-    brief: args.brief,
-    useCaseResearch: useCase.finalMarkdown,
-    domainResearch: domain.finalMarkdown,
-    meta: {
-      briefHash,
-      schemaVersion: SCHEMA_VERSION,
-      startedAt,
-      completedAt: new Date().toISOString(),
-      totalPasses: { useCase: useCase.passes.length, domain: domain.passes.length },
-      finalCriticScores: { useCase: useCase.finalScore, domain: domain.finalScore },
-      convergedEarly: { useCase: useCase.convergedEarly, domain: domain.convergedEarly },
-      totalTokensUsed: totalPassTokens,
-      modelUsed: args.provider.name === 'mock' ? 'mock' : 'claude-sonnet-4-6',
-      researcher: args.provider.name
+  // Helper: produce structured extractions from current narratives.
+  const extractOnce = async () =>
+    args.provider.runExtraction({
+      brief: args.brief,
+      useCaseResearch: useCase.finalMarkdown,
+      domainResearch: domain.finalMarkdown,
+      meta: {
+        briefHash,
+        schemaVersion: SCHEMA_VERSION,
+        startedAt,
+        completedAt: new Date().toISOString(),
+        totalPasses: { useCase: useCase.passes.length, domain: domain.passes.length },
+        finalCriticScores: { useCase: useCase.finalScore, domain: domain.finalScore },
+        convergedEarly: { useCase: useCase.convergedEarly, domain: domain.convergedEarly },
+        totalTokensUsed: totalPassTokens,
+        modelUsed: args.provider.name === 'mock' ? 'mock' : 'claude-sonnet-4-6',
+        researcher: args.provider.name
+      }
+    });
+
+  let extractionRun = await extractOnce();
+  let extractionTokens = extractionRun.tokensUsed;
+  let auditExitOutcome: AuditExitOutcome | undefined;
+
+  // Audit-exit: gate the loop on the audit result. If the audit fails the
+  // threshold or applies an expert cap, feed audit findings back as critic
+  // gaps and request one targeted research pass + re-extraction.
+  if (args.auditExit) {
+    const maxRetries = args.auditExit.maxRetries ?? 2;
+    let retries = 0;
+    let audit = await args.auditExit.run(extractionRun.extractions);
+
+    while (
+      retries < maxRetries &&
+      !auditPassed(audit, args.auditExit.threshold, args.auditExit.respectCaps)
+    ) {
+      retries += 1;
+      const targetedGaps = auditFindingsAsGaps(audit);
+
+      // Run ONE targeted research pass per topic with audit findings as critic
+      // gaps. Re-extracting after gives the loop a chance to incorporate the
+      // researcher's response to the audit's specific complaints.
+      const [extraUseCase, extraDomain] = await Promise.all([
+        runTargetedTopicPass('use-case', args.brief, args.provider, useCase, targetedGaps, tokenBudgetRemaining),
+        runTargetedTopicPass('domain', args.brief, args.provider, domain, targetedGaps, tokenBudgetRemaining)
+      ]);
+      if (extraUseCase) {
+        useCase.passes.push(extraUseCase);
+        if (extraUseCase.critique.totalScore > useCase.finalScore) {
+          useCase.finalScore = extraUseCase.critique.totalScore;
+          useCase.finalMarkdown = extraUseCase.markdown;
+        }
+      }
+      if (extraDomain) {
+        domain.passes.push(extraDomain);
+        if (extraDomain.critique.totalScore > domain.finalScore) {
+          domain.finalScore = extraDomain.critique.totalScore;
+          domain.finalMarkdown = extraDomain.markdown;
+        }
+      }
+
+      extractionRun = await extractOnce();
+      extractionTokens += extractionRun.tokensUsed;
+      audit = await args.auditExit.run(extractionRun.extractions);
     }
-  });
+
+    auditExitOutcome = {
+      finalAudit: audit,
+      retries,
+      passed: auditPassed(audit, args.auditExit.threshold, args.auditExit.respectCaps)
+    };
+  }
 
   return {
     briefHash,
@@ -198,6 +286,92 @@ export async function runResearchLoop(args: {
     useCase,
     domain,
     extractions: extractionRun.extractions,
-    totalTokensUsed: totalPassTokens + extractionRun.tokensUsed
+    totalTokensUsed: totalPassTokens + extractionTokens,
+    auditExit: auditExitOutcome
+  };
+}
+
+function auditPassed(audit: AuditExitResult, threshold: number, respectCaps: boolean): boolean {
+  if (audit.total < threshold) return false;
+  if (respectCaps && audit.capApplied < 100) return false;
+  return true;
+}
+
+function auditFindingsAsGaps(audit: AuditExitResult): CritiqueResult['gaps'] {
+  const gaps: CritiqueResult['gaps'] = [];
+  for (const reason of audit.capReasons) {
+    gaps.push({
+      area: 'audit-cap',
+      severity: 'critical',
+      instruction: `Address audit cap to lift score above the gating threshold: ${reason}`
+    });
+  }
+  for (const f of audit.topFindings) {
+    if (f.severity === 'info') continue;
+    gaps.push({
+      area: `audit-${f.dimension}`,
+      severity: f.severity === 'blocker' ? 'critical' : 'important',
+      instruction: f.message
+    });
+  }
+  return gaps;
+}
+
+async function runTargetedTopicPass(
+  topic: ResearchTopic,
+  brief: ProjectInput,
+  provider: ResearchProvider,
+  current: TopicResult,
+  auditGaps: CritiqueResult['gaps'],
+  tokenBudgetRemaining: { value: number }
+): Promise<PassRecord | null> {
+  if (tokenBudgetRemaining.value <= 0) return null;
+  const passNumber = current.passes.length + 1;
+  // Synthetic critique to feed the targeted pass: previous score (use the topic's
+  // final score) + audit gaps converted into critic gaps. The researcher
+  // prompt will treat these gaps as scope.
+  const syntheticCritique: CritiqueResult = {
+    pass: passNumber - 1,
+    topic,
+    scores: {
+      coverage: 50,
+      citationDensity: 50,
+      specificity: 50,
+      recency: 50,
+      internalConsistency: 50,
+      briefAlignment: 50
+    },
+    totalScore: current.finalScore,
+    verdict: 'continue',
+    gaps: auditGaps,
+    redactionsRequired: []
+  };
+
+  const passStart = Date.now();
+  const research = await provider.runResearchPass({
+    topic,
+    pass: passNumber,
+    totalPasses: passNumber,
+    brief,
+    previousResearch: current.finalMarkdown,
+    previousCritique: syntheticCritique
+  });
+  const critique = await provider.runCritiquePass({
+    topic,
+    pass: passNumber,
+    totalPasses: passNumber,
+    brief,
+    passOutput: research.markdown,
+    previousScore: current.finalScore
+  });
+  const totalTokens = research.tokensUsed + critique.tokensUsed;
+  tokenBudgetRemaining.value -= totalTokens;
+
+  return {
+    pass: passNumber,
+    markdown: research.markdown,
+    critique: critique.critique,
+    tokensUsed: totalTokens,
+    durationMs: Date.now() - passStart
   };
 }

@@ -27,6 +27,8 @@
     "status": "tsx scripts/mvp-builder-status.ts",
     "test:quality-regression": "tsx scripts/test-quality-regression.ts",
     "test:release-blocker-regression": "tsx scripts/test-release-blocker-regression.ts",
+    "test:audit-exit": "tsx scripts/test-audit-exit-criterion.ts",
+    "test:audit-exit-e2e": "tsx scripts/test-audit-exit-end-to-end.ts",
     "autoresearch": "tsx scripts/mvp-builder-autoresearch.ts",
     "orchestrate": "tsx scripts/mvp-builder-orchestrate.ts",
     "orchestrate:dry-run": "tsx scripts/mvp-builder-orchestrate.ts --dry-run=true",
