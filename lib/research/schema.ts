@@ -312,6 +312,19 @@ export type JobToBeDone = WithProvenance & {
   hireForCriteria: string[];  // what would make them adopt this product
 };
 
+/**
+ * RC2: explicit research-source provenance, distinct from `researcher` (which
+ * names the LLM provider). The audit, idea-critique generator, and demo/client
+ * readiness rule all key off this field — synthesizer output is structurally
+ * valid but cannot stand in for real product judgment.
+ *
+ *   synthesized   — produced by scripts/synthesize-research-ontology.ts
+ *   agent-recipe  — produced by an LLM agent following docs/RESEARCH_RECIPE.md
+ *   imported-real — manually imported real research (e.g. archived A4 output)
+ *   manual        — hand-authored fixture (test scenarios, demos)
+ */
+export type ResearchSource = 'synthesized' | 'agent-recipe' | 'imported-real' | 'manual';
+
 export type ResearchMeta = {
   briefHash: string;
   schemaVersion: typeof SCHEMA_VERSION;
@@ -323,9 +336,30 @@ export type ResearchMeta = {
   totalTokensUsed: number;
   modelUsed: string;
   researcher: 'anthropic-sdk' | 'claude-code-session' | 'mock';
+  /**
+   * RC2 (optional): explicit source provenance. Older meta files may omit this;
+   * call `getResearchSource(meta)` to read with backward-compatible inference.
+   */
+  researchSource?: ResearchSource;
   /** Phase E4: optional product-strategy artifacts surfaced before phase work begins. */
   discovery?: DiscoveryArtifacts;
 };
+
+/**
+ * Read research source with conservative inference for older meta files that
+ * predate the explicit `researchSource` field.
+ *
+ *   - explicit researchSource → respected as-is
+ *   - researcher === 'mock' → 'synthesized'
+ *   - researcher === 'anthropic-sdk' or 'claude-code-session' → 'agent-recipe'
+ *   - otherwise → 'manual' (do not overclaim demo readiness)
+ */
+export function getResearchSource(meta: { researcher?: string; researchSource?: ResearchSource }): ResearchSource {
+  if (meta.researchSource) return meta.researchSource;
+  if (meta.researcher === 'mock') return 'synthesized';
+  if (meta.researcher === 'anthropic-sdk' || meta.researcher === 'claude-code-session') return 'agent-recipe';
+  return 'manual';
+}
 
 export type CritiqueResult = {
   pass: number;

@@ -23,6 +23,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { getResearchSource, type ResearchSource } from '../lib/research/schema';
 
 type Finding = {
   dimension: string;
@@ -48,12 +49,29 @@ type ExpertScore = {
   cap?: { applied: number; reason: string }; // when this dim caps the total
 };
 
+type Readiness = {
+  /** Workspace is structurally complete and well-formed (audit total ≥ 85). */
+  productionReady: boolean;
+  /** Workspace is grounded in research extractions (research/extracted/* present). */
+  researchGrounded: boolean;
+  /** Workspace is fit to show a real customer/stakeholder. Requires real research source + complete artifacts. */
+  demoReady: boolean;
+  /** Alias of demoReady — same rule, surfaced separately so client-vs-internal use can diverge later. */
+  clientReady: boolean;
+  /** Human-readable explanation of why demoReady/clientReady is false (or empty when true). */
+  reason: string;
+  /** RC2: research-source provenance ('synthesized' | 'agent-recipe' | 'imported-real' | 'manual'). */
+  researchSource: ResearchSource;
+};
+
 type AuditResult = {
   packageRoot: string;
   productName: string;
   total: number;
   rating: 'cookie-cutter' | 'thin' | 'workable' | 'production-ready';
   researchGrounded: boolean;
+  /** RC2: source-aware readiness assessment. */
+  readiness: Readiness;
   dimensions: DimensionScore[];
   topFindings: Finding[];
   expert?: {
@@ -750,6 +768,7 @@ type ResearchExtractsLite = {
   }>;
   meta?: {
     researcher?: string;
+    researchSource?: ResearchSource;
     discovery?: {
       valueProposition?: { headline?: string; oneLineProblem?: string; oneLineSolution?: string; topThreeOutcomes?: string[] };
       whyNow?: { driver?: string; recentChange?: string; risksIfDelayed?: string };
@@ -784,8 +803,32 @@ function loadExtracts(packageRoot: string): ResearchExtractsLite | undefined {
   };
 }
 
+/**
+ * RC2: synthesizer is a deterministic regression harness, not a product
+ * critic. Cap judgment-heavy expert dimensions on synth so the headline
+ * cannot pretend synth output is equivalent to real-recipe output.
+ *
+ *   research-depth:      cap 6/10  (real recipe can fully populate)
+ *   edge-case-coverage:  cap 7/10  (real recipe can name domain-specific failures)
+ *   idea-clarity:        cap 2/5   (already enforced via existing rule)
+ *
+ * Structural dimensions (screen-depth, schema-realism, test-case-grounding,
+ * jtbd-coverage, realistic-sample-data, role-permission-matrix,
+ * regulatory-mapping) remain uncapped — synth proves the generator works.
+ *
+ * Caps are NOT promoted to expert blocker caps (the lowest-applied total
+ * stays at 100 for synth). They simply prevent synth from claiming full
+ * judgment-heavy credit, and feed into demoReady=false.
+ */
+function synthJudgmentCap(source: ResearchSource, dimension: string): number | undefined {
+  if (source !== 'synthesized') return undefined;
+  if (dimension === 'research-depth') return 6;
+  if (dimension === 'edge-case-coverage') return 7;
+  return undefined;
+}
+
 // E1. research-depth (max +2 bonus, cap=85 when score < 4/10)
-function expertResearchDepth(ex: ResearchExtractsLite): ExpertScore {
+function expertResearchDepth(ex: ResearchExtractsLite, source: ResearchSource): ExpertScore {
   const evidence: string[] = [];
   let score = 0;
   if (ex.entities.length >= 3) {
@@ -841,11 +884,18 @@ function expertResearchDepth(ex: ResearchExtractsLite): ExpertScore {
   }
   // Cap: if score < 4/10, cap total at 85 (production-ready boundary)
   const cap = score < 4 ? { applied: 85, reason: `research depth ${score}/10 — too shallow for production-ready` } : undefined;
+  // RC2: synth judgment cap. Don't penalize synth as a generator failure —
+  // just don't give full real-recipe credit on this judgment dimension.
+  const synthCap = synthJudgmentCap(source, 'research-depth');
+  if (synthCap !== undefined && score > synthCap) {
+    evidence.push(`synthesized research source — capped at ${synthCap}/10 on judgment-heavy dimension; run docs/RESEARCH_RECIPE.md for full credit`);
+    score = synthCap;
+  }
   return { name: 'research-depth', score: Math.min(10, score), max: 10, evidence, cap };
 }
 
 // E2. edge-case-coverage (max +2 bonus, cap=86 when generic-failure-mode rate ≥40%)
-function expertEdgeCaseCoverage(ex: ResearchExtractsLite, packageRoot: string): ExpertScore {
+function expertEdgeCaseCoverage(ex: ResearchExtractsLite, packageRoot: string, source: ResearchSource): ExpertScore {
   const evidence: string[] = [];
   let score = 0;
   const allTriggers = ex.workflows.flatMap((w) => (w.failureModes || []).map((f) => f.trigger.toLowerCase()));
@@ -882,6 +932,13 @@ function expertEdgeCaseCoverage(ex: ResearchExtractsLite, packageRoot: string): 
     evidence.push('no failure mode references a regulatory or systemic concern');
   }
   const cap = total > 3 && genericRate >= 0.4 ? { applied: 86, reason: `${(genericRate * 100).toFixed(0)}% of failure-mode triggers are generic ("invalid input", "user error", etc.)` } : undefined;
+  // RC2: synth judgment cap. Real-recipe can name domain-specific edge cases
+  // that the deterministic synthesizer cannot.
+  const synthCap = synthJudgmentCap(source, 'edge-case-coverage');
+  if (synthCap !== undefined && score > synthCap) {
+    evidence.push(`synthesized research source — capped at ${synthCap}/10 on judgment-heavy dimension; run docs/RESEARCH_RECIPE.md for full credit`);
+    score = synthCap;
+  }
   return { name: 'edge-case-coverage', score: Math.min(10, score), max: 10, evidence, cap };
 }
 
@@ -1254,9 +1311,9 @@ function expertJtbdCoverage(ex: ResearchExtractsLite): ExpertScore | undefined {
   return { name: 'jtbd-coverage', score: Math.min(5, score), max: 5, evidence, cap };
 }
 
-// E10 (Phase E4). idea-clarity (max 5) — credits non-empty, non-generic critique
-// only when researcher !== 'mock' (synthesizer cannot honestly critique a brief).
-function expertIdeaClarity(ex: ResearchExtractsLite): ExpertScore | undefined {
+// E10 (Phase E4 / RC2). idea-clarity (max 5) — credits non-empty, non-generic critique
+// only when the research source is not synthesized.
+function expertIdeaClarity(ex: ResearchExtractsLite, source: ResearchSource): ExpertScore | undefined {
   const discovery = ex.meta?.discovery;
   if (!discovery) return undefined;
 
@@ -1287,29 +1344,33 @@ function expertIdeaClarity(ex: ResearchExtractsLite): ExpertScore | undefined {
     evidence.push(`whyNow complete: no`);
   }
 
-  // Critique only credited for non-synthesizer runs (synth deliberately leaves it empty).
-  const isSynth = ex.meta?.researcher === 'mock';
+  // Critique only credited for real research sources (agent-recipe / imported-real / manual).
+  // Synth deliberately leaves critique empty — see deriveDiscovery in the synthesizer.
+  const isSynth = source === 'synthesized';
   const critique = discovery.ideaCritique || [];
   const alternatives = discovery.competingAlternatives || [];
-  evidence.push(`researcher: ${ex.meta?.researcher || 'unknown'}, critique entries: ${critique.length}, alternatives: ${alternatives.length}`);
+  evidence.push(`researchSource: ${source}, researcher: ${ex.meta?.researcher || 'unknown'}, critique entries: ${critique.length}, alternatives: ${alternatives.length}`);
   if (!isSynth) {
     if (critique.length >= 3) score += 1;
     if (alternatives.length >= 1) score += 1;
   } else {
-    // Acknowledge synth honestly: don't punish, don't reward — record for transparency.
-    evidence.push(`synthesizer run: critique not credited (use real-recipe path for full idea-clarity score)`);
+    // Synth: don't punish (no cap), don't reward (no critique credit).
+    evidence.push(`synthesized research source — critique not credited (run docs/RESEARCH_RECIPE.md for full idea-clarity score)`);
   }
 
   return { name: 'idea-clarity', score: Math.min(5, score), max: 5, evidence };
 }
 
-function evaluateExpertRubric(packageRoot: string): NonNullable<AuditResult['expert']> | undefined {
+function evaluateExpertRubric(
+  packageRoot: string,
+  source: ResearchSource
+): NonNullable<AuditResult['expert']> | undefined {
   const ex = loadExtracts(packageRoot);
   if (!ex) return undefined;
 
   const dims = [
-    expertResearchDepth(ex),
-    expertEdgeCaseCoverage(ex, packageRoot),
+    expertResearchDepth(ex, source),
+    expertEdgeCaseCoverage(ex, packageRoot, source),
     expertPermissionMatrix(ex, packageRoot),
     expertRegulatoryMapping(ex, packageRoot),
     expertRealisticSampleData(ex)
@@ -1322,7 +1383,7 @@ function evaluateExpertRubric(packageRoot: string): NonNullable<AuditResult['exp
   if (testCaseGrounding) dims.push(testCaseGrounding);
   const jtbdCoverage = expertJtbdCoverage(ex);
   if (jtbdCoverage) dims.push(jtbdCoverage);
-  const ideaClarity = expertIdeaClarity(ex);
+  const ideaClarity = expertIdeaClarity(ex, source);
   if (ideaClarity) dims.push(ideaClarity);
 
   // Bonus: bonus = round(rawTotal / sumMax × 8). 8-point ceiling because 92 base + 8 = 100.
@@ -1348,6 +1409,104 @@ function evaluateExpertRubric(packageRoot: string): NonNullable<AuditResult['exp
 function detectResearchGrounded(packageRoot: string): boolean {
   const reqContent = readSafe(path.join(packageRoot, 'requirements/FUNCTIONAL_REQUIREMENTS.md'));
   return !/Generated WITHOUT research extractions/i.test(reqContent);
+}
+
+/**
+ * RC2: classify the workspace's research source. Reads research/extracted/meta.json
+ * and falls back to inference when the explicit `researchSource` field is absent.
+ * Returns 'manual' when no extractions exist (don't overclaim demo readiness).
+ */
+function detectResearchSource(packageRoot: string): ResearchSource {
+  const metaPath = path.join(packageRoot, 'research', 'extracted', 'meta.json');
+  if (!fs.existsSync(metaPath)) return 'manual';
+  try {
+    const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8')) as {
+      researcher?: string;
+      researchSource?: ResearchSource;
+    };
+    return getResearchSource(meta);
+  } catch {
+    return 'manual';
+  }
+}
+
+/**
+ * RC2: compute demo/client readiness. Synth output can be production-ready
+ * (structurally complete) and research-grounded (extractions present), but
+ * is never demo/client-ready — judgment-heavy artifacts (idea critique,
+ * competing alternatives) require an LLM agent following docs/RESEARCH_RECIPE.md.
+ */
+function computeReadiness(args: {
+  packageRoot: string;
+  total: number;
+  researchGrounded: boolean;
+  researchSource: ResearchSource;
+  expertCap: number;
+}): Readiness {
+  const productionReady = args.total >= 85;
+  const reasons: string[] = [];
+
+  // Source rule: synth and unknown manual fixtures are never demo-ready.
+  const sourceOk = args.researchSource === 'agent-recipe' || args.researchSource === 'imported-real' || args.researchSource === 'manual';
+  if (args.researchSource === 'synthesized') {
+    reasons.push('research source is synthesized — synth proves the generator is structurally sound but cannot supply real product judgment (idea critique, competing alternatives, market risk)');
+  }
+
+  // Score rule: demo readiness requires high audit total.
+  if (args.total < 95) {
+    reasons.push(`audit total ${args.total}/100 below demo threshold 95`);
+  }
+
+  // No expert caps fired.
+  if (args.expertCap < 100) {
+    reasons.push(`expert cap applied at ${args.expertCap} (cap reasons must be addressed before demo)`);
+  }
+
+  // Required artifacts for a demo-ready workspace.
+  const ex = loadExtracts(args.packageRoot);
+  const ideaCritique = ex?.meta?.discovery?.ideaCritique || [];
+  const competingAlternatives = ex?.meta?.discovery?.competingAlternatives || [];
+  const screens = ex?.screens || [];
+  const testCases = ex?.testCases || [];
+  const ddlExists = fs.existsSync(path.join(args.packageRoot, 'architecture/DATABASE_SCHEMA.sql'));
+
+  if (sourceOk) {
+    if (ideaCritique.length === 0) {
+      reasons.push('no idea critique recorded (Pass 0 of docs/RESEARCH_RECIPE.md must populate ideaCritique[])');
+    }
+    if (competingAlternatives.length === 0) {
+      reasons.push('no competing alternatives recorded (real research must name what the audience could pick instead)');
+    }
+    if (screens.length === 0) {
+      reasons.push('no screens defined (ui-ux/screens/*.md cannot be generated)');
+    }
+    if (!ddlExists) {
+      reasons.push('architecture/DATABASE_SCHEMA.sql missing (DB schema realism cannot be demonstrated)');
+    }
+    if (testCases.length === 0) {
+      reasons.push('no concrete test cases (TEST_CASES.md cannot ground the demo)');
+    }
+  }
+
+  const demoReady =
+    sourceOk &&
+    args.total >= 95 &&
+    args.expertCap >= 100 &&
+    ideaCritique.length > 0 &&
+    competingAlternatives.length > 0 &&
+    screens.length > 0 &&
+    testCases.length > 0 &&
+    ddlExists &&
+    args.researchGrounded;
+
+  return {
+    productionReady,
+    researchGrounded: args.researchGrounded,
+    demoReady,
+    clientReady: demoReady,
+    reason: demoReady ? '' : reasons.join('; '),
+    researchSource: args.researchSource
+  };
 }
 
 function rate(score: number): AuditResult['rating'] {
@@ -1378,9 +1537,13 @@ export function runAudit(packageRoot: string): AuditResult {
   const researchGrounded = detectResearchGrounded(packageRoot);
   if (!researchGrounded) total = Math.max(0, total - 5);
 
+  // RC2: classify research source before evaluating the expert rubric so
+  // synth-vs-real judgment caps can fire correctly inside expert dims.
+  const researchSource = detectResearchSource(packageRoot);
+
   // Phase D: layer the expert rubric. Bonus is added to total (capped at 100);
   // expert caps then pull total down if any expert dim found shallow content.
-  const expert = evaluateExpertRubric(packageRoot);
+  const expert = evaluateExpertRubric(packageRoot, researchSource);
   if (expert) {
     total = Math.min(100, total + expert.bonus);
     if (expert.cap < 100) total = Math.min(total, expert.cap);
@@ -1396,12 +1559,22 @@ export function runAudit(packageRoot: string): AuditResult {
     ...allFindings.filter((f) => f.severity === 'blocker'),
     ...allFindings.filter((f) => f.severity === 'warning')
   ].slice(0, 12);
+
+  const readiness = computeReadiness({
+    packageRoot,
+    total,
+    researchGrounded,
+    researchSource,
+    expertCap: expert?.cap ?? 100
+  });
+
   return {
     packageRoot,
     productName,
     total,
     rating: rate(total),
     researchGrounded,
+    readiness,
     dimensions,
     topFindings,
     expert
@@ -1413,9 +1586,19 @@ export function renderAudit(result: AuditResult): string {
   lines.push(`# Quality audit — ${result.productName}`);
   lines.push('');
   lines.push(`- **Overall:** ${result.total}/100 — ${result.rating}`);
+  lines.push(`- **Research source:** ${result.readiness.researchSource}`);
+  lines.push(`- **Production-ready:** ${result.readiness.productionReady ? 'yes' : 'no'}`);
   lines.push(`- **Research-grounded:** ${result.researchGrounded ? 'yes' : 'no (−5 penalty applied)'}`);
+  lines.push(`- **Demo-ready / Client-ready:** ${result.readiness.demoReady ? 'yes' : 'no'}`);
+  if (!result.readiness.demoReady && result.readiness.reason) {
+    lines.push(`  - Why not: ${result.readiness.reason}`);
+  }
   lines.push(`- **Package:** ${result.packageRoot}`);
   lines.push('');
+  if (result.readiness.researchSource === 'synthesized') {
+    lines.push('> ℹ️ Synthesized research is structurally valid (regression-grade) but is **not** client/demo-ready. Idea critique, competing alternatives, and judgment-heavy dimensions require an LLM agent following docs/RESEARCH_RECIPE.md. Run real recipe to unlock full idea-clarity, research-depth, and edge-case-coverage scoring.');
+    lines.push('');
+  }
   lines.push('## Dimensions');
   lines.push('| Dimension | Score | Max |');
   lines.push('| --- | ---: | ---: |');
@@ -1476,7 +1659,11 @@ function main() {
   const reportPath = path.join(evidenceDir, `QUALITY_AUDIT-${stamp}.md`);
   fs.writeFileSync(reportPath, renderAudit(result), 'utf8');
   fs.writeFileSync(path.join(evidenceDir, 'last-audit.json'), JSON.stringify(result, null, 2), 'utf8');
-  console.log(`Quality audit: ${result.total}/100 — ${result.rating} (research-grounded=${result.researchGrounded})`);
+  console.log(
+    `Quality audit: ${result.total}/100 — ${result.rating} ` +
+      `(research-grounded=${result.researchGrounded}, source=${result.readiness.researchSource}, ` +
+      `productionReady=${result.readiness.productionReady}, demoReady=${result.readiness.demoReady})`
+  );
   console.log(`Report: ${path.relative(packageRoot, reportPath).replace(/\\/g, '/')}`);
   process.exitCode = result.total >= 50 ? 0 : 1;
 }

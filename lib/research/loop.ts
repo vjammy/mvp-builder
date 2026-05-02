@@ -206,6 +206,12 @@ export async function runResearchLoop(args: {
     useCase.passes.reduce((s, p) => s + p.tokensUsed, 0) +
     domain.passes.reduce((s, p) => s + p.tokensUsed, 0);
 
+  // RC2: stamp explicit researchSource so downstream demoReady checks don't
+  // have to infer from the legacy `researcher` field. Mock provider stays
+  // 'synthesized' (test fixtures); real LLM providers are 'agent-recipe'.
+  const researchSource: 'synthesized' | 'agent-recipe' =
+    args.provider.name === 'mock' ? 'synthesized' : 'agent-recipe';
+
   // Helper: produce structured extractions from current narratives.
   const extractOnce = async () =>
     args.provider.runExtraction({
@@ -222,7 +228,8 @@ export async function runResearchLoop(args: {
         convergedEarly: { useCase: useCase.convergedEarly, domain: domain.convergedEarly },
         totalTokensUsed: totalPassTokens,
         modelUsed: args.provider.name === 'mock' ? 'mock' : 'claude-sonnet-4-6',
-        researcher: args.provider.name
+        researcher: args.provider.name,
+        researchSource
       }
     });
 

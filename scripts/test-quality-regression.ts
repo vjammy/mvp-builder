@@ -654,6 +654,26 @@ async function main() {
       failures++;
     }
 
+    // RC2: synthesized extractions must stamp meta.researchSource = 'synthesized'
+    // so the audit's demoReady rule can correctly reject synth output as
+    // client/demo-ready material. If this drifts, demoReady=true could leak
+    // through for synth workspaces.
+    if (synthesized.meta.researchSource !== 'synthesized') {
+      console.error(`  FAIL: ${useCase.name} synthesized extractions have meta.researchSource=${synthesized.meta.researchSource}, expected 'synthesized'.`);
+      failures++;
+    }
+    // RC2: synth must NOT populate ideaCritique or competingAlternatives — those
+    // are real-recipe-only artifacts. The audit credits them only for
+    // researchSource ∈ {agent-recipe, imported-real, manual}.
+    if ((synthesized.meta.discovery?.ideaCritique ?? []).length !== 0) {
+      console.error(`  FAIL: ${useCase.name} synthesized ideaCritique should be empty (got ${synthesized.meta.discovery?.ideaCritique?.length}).`);
+      failures++;
+    }
+    if ((synthesized.meta.discovery?.competingAlternatives ?? []).length !== 0) {
+      console.error(`  FAIL: ${useCase.name} synthesized competingAlternatives should be empty (got ${synthesized.meta.discovery?.competingAlternatives?.length}).`);
+      failures++;
+    }
+
     const requiredModuleFiles = [
       'product-strategy/PRODUCT_STRATEGY_START_HERE.md',
       'product-strategy/PRODUCT_NORTH_STAR.md',

@@ -272,12 +272,49 @@ function deriveEntities(input: ProjectInput, actors: Actor[]): Entity[] {
 }
 
 // ---------- workflows ----------
+
+/**
+ * Pick a short, verb+noun workflow name. Replaces the prior
+ * `titleCase(primary-workflow-answer).slice(0, 60)` which produced ugly
+ * sentence-fragment names like "Sales Development Reps And Their Managers.
+ * Sets Up The Works" for briefs that put the whole flow in the questionnaire.
+ *
+ * Strategy: pick a verb based on must-have feature keywords, then append the
+ * core entity name. Falls back to "Manage <Entity>".
+ */
+function pickPrimaryVerb(input: ProjectInput): string {
+  const features = (input.mustHaveFeatures || '').toLowerCase();
+  // Order matters — earliest match wins. Specific verbs first, generic last.
+  if (/\bqualif/i.test(features)) return 'Qualify';
+  if (/\bschedul|book|reserve|appointment\b/.test(features)) return 'Schedule';
+  if (/\bimport|intake|onboard\b/.test(features)) return 'Import';
+  if (/\bcapture|enroll|register\b/.test(features)) return 'Capture';
+  if (/\bfollow[\s-]?up|outreach|call|email\b/.test(features)) return 'Follow up on';
+  if (/\b(track|log|record|monitor|inventor)\b/.test(features)) return 'Track';
+  if (/\b(plan|coordinate|organi[sz]e)\b/.test(features)) return 'Plan';
+  if (/\b(approve|review|moderat)\b/.test(features)) return 'Manage';
+  if (/\b(assign|allocate|dispatch)\b/.test(features)) return 'Assign';
+  return 'Manage';
+}
+
+function deriveWorkflowName(
+  intent: 'primary' | 'review' | 'members',
+  input: ProjectInput,
+  entityName: string
+): string {
+  if (intent === 'review') return `Review ${entityName}`;
+  if (intent === 'members') return 'Manage members';
+  const verb = pickPrimaryVerb(input);
+  return `${verb} ${entityName}`;
+}
+
 function deriveWorkflows(input: ProjectInput, actors: Actor[], entities: Entity[]): Workflow[] {
   const features = splitList(input.mustHaveFeatures).slice(0, 4);
   const primary = input.questionnaireAnswers['primary-workflow'] || features[0] || `Use ${input.productName}`;
   const primaryActor = actors[0]?.id || 'actor-primary-user';
   const reviewerActor = actors.find((a) => a.type === 'reviewer')?.id || actors[1]?.id || primaryActor;
   const coreEntity = entities[0]?.id || 'entity-core';
+  const coreEntityName = entities[0]?.name || 'Record';
   const memberEntity = entities.find((e) => e.id === 'entity-member-profile')?.id || coreEntity;
   const auditEntity = entities.find((e) => e.id === 'entity-audit-entry')?.id || coreEntity;
 
@@ -294,7 +331,7 @@ function deriveWorkflows(input: ProjectInput, actors: Actor[], entities: Entity[
   workflows.push(
     withProvenance(
       {
-        name: titleCase(primary).slice(0, 60) || `${input.productName} core workflow`,
+        name: deriveWorkflowName('primary', input, coreEntityName),
         primaryActor,
         secondaryActors: actors.filter((a) => a.id !== primaryActor).slice(0, 2).map((a) => a.id),
         steps: wf1Steps,
@@ -319,7 +356,7 @@ function deriveWorkflows(input: ProjectInput, actors: Actor[], entities: Entity[
     workflows.push(
       withProvenance(
         {
-          name: `${input.productName} review`,
+          name: deriveWorkflowName('review', input, coreEntityName),
           primaryActor: reviewerActor,
           secondaryActors: [primaryActor],
           steps: wf2Steps,
@@ -338,7 +375,7 @@ function deriveWorkflows(input: ProjectInput, actors: Actor[], entities: Entity[
   workflows.push(
     withProvenance(
       {
-        name: `${input.productName} member management`,
+        name: deriveWorkflowName('members', input, coreEntityName),
         primaryActor: reviewerActor,
         secondaryActors: [primaryActor],
         steps: [
@@ -974,6 +1011,7 @@ export function synthesizeExtractions(input: ProjectInput): ResearchExtractions 
     totalTokensUsed: 0,
     modelUsed: 'synthesizer-deterministic',
     researcher: 'mock',
+    researchSource: 'synthesized',
     discovery
   };
 

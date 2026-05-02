@@ -8079,7 +8079,7 @@ function buildFinalGateReport() {
 `;
 }
 
-function buildFinalScorecard(bundle?: ProjectBundle) {
+function buildFinalScorecard(bundle?: ProjectBundle, extractions?: ResearchExtractions) {
   if (!bundle) {
     return `# FINAL_SCORECARD
 
@@ -8102,6 +8102,50 @@ function buildFinalScorecard(bundle?: ProjectBundle) {
     bundle.score.adjustments.length === 0
       ? '- none'
       : bundle.score.adjustments.map((a) => `- ${a}`).join('\n');
+  // RC2: classify the workspace's research source so the scorecard can call
+  // out demo/client-readiness honestly. Synth is structurally strong but
+  // cannot stand in for real product judgment.
+  const inferredSource: 'synthesized' | 'agent-recipe' | 'imported-real' | 'manual' | 'unknown' = (() => {
+    const meta = extractions?.meta;
+    if (!meta) return bundle.hasResearchExtractions ? 'manual' : 'unknown';
+    if (meta.researchSource) return meta.researchSource;
+    if (meta.researcher === 'mock') return 'synthesized';
+    if (meta.researcher === 'anthropic-sdk' || meta.researcher === 'claude-code-session') return 'agent-recipe';
+    return 'manual';
+  })();
+  const demoReadinessBlock =
+    inferredSource === 'synthesized'
+      ? `## Demo / client readiness
+
+- **Production-ready (structural):** depends on quality audit total ≥ 85
+- **Research-grounded:** ${bundle.hasResearchExtractions ? 'yes' : 'no'}
+- **Demo / client-ready:** **no — research source is synthesized**
+
+Synthesized research is a deterministic regression harness. It proves the schema,
+generator, audit, and file-emission paths work, but it does not produce real
+product judgment (idea critique, competing alternatives, market risk). To unlock
+client/demo readiness, run docs/RESEARCH_RECIPE.md inside an LLM agent and
+regenerate with \`--research-from=<dir>\`. The audit's \`demoReady\` flag
+remains \`false\` for synthesized output regardless of headline score.
+`
+      : inferredSource === 'agent-recipe' || inferredSource === 'imported-real'
+        ? `## Demo / client readiness
+
+- **Production-ready (structural):** depends on quality audit total ≥ 85
+- **Research-grounded:** ${bundle.hasResearchExtractions ? 'yes' : 'no'}
+- **Research source:** ${inferredSource}
+- **Demo / client-ready:** \`true\` only when audit ≥ 95, no expert cap fires, idea critique + competing alternatives + screens + DB schema + test cases all populated.
+
+Run \`npm run audit\` to surface the final demoReady verdict and any reasons it is currently \`false\`.
+`
+        : `## Demo / client readiness
+
+- **Production-ready (structural):** depends on quality audit total ≥ 85
+- **Research-grounded:** ${bundle.hasResearchExtractions ? 'yes' : 'no'}
+- **Research source:** unknown / manual fixture — do not promote to client demo without verifying provenance.
+
+Set \`meta.researchSource\` explicitly in research/extracted/meta.json so this scorecard reflects intent.
+`;
   return `# FINAL_SCORECARD
 
 ## Headline
@@ -8151,7 +8195,8 @@ ${adjustmentLines}
 - Product fit capped at 71 if semantic-fit verdict is \`low\`.
 - Product fit capped at 30 if semantic-fit verdict is \`critical\`.
 - "Strong handoff" rating requires build readiness ≥ 88, product fit ≥ 88, and zero blockers.
-`;
+
+${demoReadinessBlock}`;
 }
 
 function buildFinalRecoverySummary() {
@@ -9248,7 +9293,7 @@ function createGeneratedFiles(bundle: ProjectBundle, input: ProjectInput, contex
   add('FINAL_RELEASE_REPORT.md', buildFinalReleaseReport());
   add('FINAL_HANDOFF.md', buildFinalHandoff());
   add('FINAL_GATE_REPORT.md', buildFinalGateReport());
-  add('FINAL_SCORECARD.md', buildFinalScorecard(bundle));
+  add('FINAL_SCORECARD.md', buildFinalScorecard(bundle, context.extractions));
   add('FINAL_RECOVERY_SUMMARY.md', buildFinalRecoverySummary());
   add('FINAL_DEPLOYMENT_STATUS.md', buildFinalDeploymentStatus());
   add('QUICKSTART.md', buildPackageQuickstart(bundle, input));
