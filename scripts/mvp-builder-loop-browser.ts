@@ -14,11 +14,28 @@ type RuntimeTarget = {
   startTimeoutMs: number;
 };
 
+type EntitySampleRecord = {
+  id: string;
+  category: 'happy' | 'negative' | 'boundary' | 'role-permission';
+  actorId?: string;
+  reason?: string;
+  note?: string;
+  data: Record<string, unknown>;
+};
+
 type EntityFixture = {
   entityName: string;
   reqIds: string[];
+  reqActorIds: Record<string, string>;
+  // Convenience pointers to the first happy + first negative (for backwards-compat callers).
   happyPath: Record<string, unknown> | null;
   negativePath: Record<string, unknown> | null;
+  samples: {
+    happy: EntitySampleRecord[];
+    negative: EntitySampleRecord[];
+    boundary: EntitySampleRecord[];
+    rolePermission: EntitySampleRecord[];
+  };
 };
 
 type RequirementRecord = {
@@ -101,12 +118,19 @@ function parseEntityFixtures(packageRoot: string): EntityFixture[] {
     }
     const entityName = headerLine.trim();
     const reqLineMatch = section.match(/Used by requirements:\s*([^\n]+)/i);
-    const reqIds = (reqLineMatch?.[1] || '')
-      .split(',')
-      .map((token) => token.trim())
-      .filter((token) => /^REQ-\d+$/i.test(token))
-      .map((token) => token.toUpperCase());
-    const jsonBlocks = Array.from(section.matchAll(/```json\n([\s\S]*?)\n```/g)).map((match) => match[1]);
+    const reqIds: string[] = [];
+    const reqActorIds: Record<string, string> = {};
+    if (reqLineMatch) {
+      // Accept either "REQ-1" or "REQ-1 (actor-id)" tokens.
+      const reqTokenRegex = /REQ-(\d+)(?:\s*\(([^)]+)\))?/gi;
+      let match: RegExpExecArray | null;
+      while ((match = reqTokenRegex.exec(reqLineMatch[1])) !== null) {
+        const reqId = `REQ-${match[1]}`;
+        reqIds.push(reqId);
+        if (match[2]) reqActorIds[reqId] = match[2].trim();
+      }
+    }
+
     const safeParse = (raw: string | undefined) => {
       if (!raw) return null;
       try {
@@ -115,11 +139,52 @@ function parseEntityFixtures(packageRoot: string): EntityFixture[] {
         return null;
       }
     };
+
+    const samples: EntityFixture['samples'] = { happy: [], negative: [], boundary: [], rolePermission: [] };
+
+    // Modern format: ### Sample <category>: <id>
+    const sampleSubsections = section.split(/\n### Sample /).slice(1);
+    if (sampleSubsections.length) {
+      for (const subsection of sampleSubsections) {
+        const headingMatch = subsection.match(/^([a-z-]+):\s*([^\n]+)/i);
+        if (!headingMatch) continue;
+        const category = headingMatch[1].toLowerCase();
+        const id = headingMatch[2].trim();
+        const actorMatch = subsection.match(/^- Actor:\s*([^\n]+)/im);
+        const reasonMatch = subsection.match(/^- Reason:\s*([^\n]+)/im);
+        const noteMatch = subsection.match(/^- Note:\s*([^\n]+)/im);
+        const jsonMatch = subsection.match(/```json\n([\s\S]*?)\n```/);
+        const data = safeParse(jsonMatch?.[1]);
+        if (!data) continue;
+        const record: EntitySampleRecord = {
+          id,
+          category: category === 'role-permission' ? 'role-permission' : (category as EntitySampleRecord['category']),
+          actorId: actorMatch?.[1].trim(),
+          reason: reasonMatch?.[1].trim(),
+          note: noteMatch?.[1].trim(),
+          data
+        };
+        if (record.category === 'happy') samples.happy.push(record);
+        else if (record.category === 'negative') samples.negative.push(record);
+        else if (record.category === 'boundary') samples.boundary.push(record);
+        else if (record.category === 'role-permission') samples.rolePermission.push(record);
+      }
+    } else {
+      // Legacy format: first two ```json blocks = happy + negative.
+      const jsonBlocks = Array.from(section.matchAll(/```json\n([\s\S]*?)\n```/g)).map((m) => m[1]);
+      const happy = safeParse(jsonBlocks[0]);
+      const negative = safeParse(jsonBlocks[1]);
+      if (happy) samples.happy.push({ id: 'happy-default', category: 'happy', data: happy });
+      if (negative) samples.negative.push({ id: 'negative-default', category: 'negative', data: negative });
+    }
+
     fixtures.push({
       entityName,
       reqIds,
-      happyPath: safeParse(jsonBlocks[0]),
-      negativePath: safeParse(jsonBlocks[1])
+      reqActorIds,
+      happyPath: samples.happy[0]?.data || null,
+      negativePath: samples.negative[0]?.data || null,
+      samples
     });
   }
   return fixtures;

@@ -6897,13 +6897,6 @@ function buildSampleData(input: ProjectInput, context: ProjectContext, phases: P
   });
 
   const renderEntityBlock = (entity: typeof entities[number]) => {
-    const sampleJson = JSON.stringify(entity.sample, null, 2);
-    const negativeSample = { ...entity.sample } as Record<string, string | number | boolean | null>;
-    const firstStringField = entity.fields.find((field) => field.type === 'string');
-    const firstIdField = entity.fields.find((field) => field.type === 'id');
-    if (firstStringField) negativeSample[firstStringField.name] = '';
-    if (firstIdField) negativeSample[firstIdField.name] = null;
-    const negativeJson = JSON.stringify(negativeSample, null, 2);
     const reqIndices = reqIndexByEntity.get(entity.name) || [];
     const reqIds = reqIndices.map((idx) => {
       const scenario = scenarios[idx];
@@ -6912,24 +6905,54 @@ function buildSampleData(input: ProjectInput, context: ProjectContext, phases: P
     });
     const reqLine = reqIds.length ? reqIds.join(', ') : 'No direct requirement reference yet.';
     const owningPhases = unique(
-      (reqIndexByEntity.get(entity.name) || []).map((idx) => getRequirementPhaseSlug(idx, phases))
+      reqIndices.map((idx) => getRequirementPhaseSlug(idx, phases))
     );
     const phasesLine = owningPhases.length ? owningPhases.join(', ') : 'no phase has assigned this entity yet';
 
-    return `## ${entity.name}
+    const header = `## ${entity.name}
 
 - Purpose: ${entity.description}
 - Used by requirements: ${reqLine}
 - Owning phases: ${phasesLine}
 - Validation rules: ${entity.fields.slice(0, 3).map((field) => `${field.name} is required`).join('; ') || 'none recorded'}.
-- Risks if sample is misused: ${context.ontology.riskTypes.filter((risk) => entity.riskTypes.includes(risk.name)).map((risk) => risk.description).join(' ') || 'data leakage, missing validation, or stale records.'}
+- Risks if sample is misused: ${context.ontology.riskTypes.filter((risk) => entity.riskTypes.includes(risk.name)).map((risk) => risk.description).join(' ') || 'data leakage, missing validation, or stale records.'}`;
 
-### Happy-path sample (use as the realistic input in tests)
+    if (entity.samples) {
+      const renderSample = (category: string, sample: { id: string; label?: string; actorId?: string; reason?: string; note?: string; data: Record<string, unknown> }) => {
+        const meta: string[] = [];
+        if (sample.label) meta.push(`- Label: ${sample.label}`);
+        if (sample.actorId) meta.push(`- Actor: ${sample.actorId}`);
+        if (sample.reason) meta.push(`- Reason: ${sample.reason}`);
+        if (sample.note) meta.push(`- Note: ${sample.note}`);
+        const metaBlock = meta.length ? `${meta.join('\n')}\n` : '';
+        return `### Sample ${category}: ${sample.id}\n${metaBlock}\`\`\`json\n${JSON.stringify(sample.data, null, 2)}\n\`\`\``;
+      };
+      const sections: string[] = [];
+      for (const sample of entity.samples.happy) sections.push(renderSample('happy', sample));
+      for (const sample of entity.samples.negative) sections.push(renderSample('negative', sample));
+      for (const sample of entity.samples.boundary) sections.push(renderSample('boundary', sample));
+      for (const sample of entity.samples.rolePermission) sections.push(renderSample('role-permission', sample));
+      return `${header}\n\n${sections.join('\n\n')}\n`;
+    }
+
+    // Back-fill: legacy single-sample format with a marker so probes know this entity is unenriched.
+    const sampleJson = JSON.stringify(entity.sample, null, 2);
+    const negativeSample = { ...entity.sample } as Record<string, string | number | boolean | null>;
+    const firstStringField = entity.fields.find((field) => field.type === 'string');
+    const firstIdField = entity.fields.find((field) => field.type === 'id');
+    if (firstStringField) negativeSample[firstStringField.name] = '';
+    if (firstIdField) negativeSample[firstIdField.name] = null;
+    const negativeJson = JSON.stringify(negativeSample, null, 2);
+    return `${header}
+
+<!-- back-fill: enrich entity.samples to unlock boundary + role-permission tests -->
+### Sample happy: happy-default
 \`\`\`json
 ${sampleJson}
 \`\`\`
 
-### Negative-path sample (use to prove the system rejects invalid input)
+### Sample negative: negative-default
+- Reason: required string field is blank and required id field is null
 \`\`\`json
 ${negativeJson}
 \`\`\`

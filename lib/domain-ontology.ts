@@ -38,6 +38,15 @@ export type OntologyActor = {
   visibility: string[];
 };
 
+export type EntitySample = {
+  id: string;
+  label?: string;
+  actorId?: string;
+  reason?: string;
+  note?: string;
+  data: Record<string, string | number | boolean | null>;
+};
+
 export type OntologyEntity = {
   name: string;
   type: string;
@@ -49,6 +58,12 @@ export type OntologyEntity = {
   ownerActors: string[];
   riskTypes: string[];
   sample: Record<string, string | number | boolean | null>;
+  samples?: {
+    happy: EntitySample[];
+    negative: EntitySample[];
+    boundary: EntitySample[];
+    rolePermission: EntitySample[];
+  };
 };
 
 export type OntologyWorkflow = {
@@ -357,7 +372,53 @@ function buildBlueprint(domainType: DomainArchetype): Blueprint {
             relationships: ['Belongs to Family Workspace', 'References Family Member assignee'],
             ownerActors: ['Parent Admin', 'Co-Parent'],
             riskTypes: ['Stale household task data', 'Child visibility leak'],
-            sample: { taskId: 'task-dishes', title: 'Unload dishwasher', assigneeMemberId: 'member-ella', dueDate: '2026-05-01', priority: 'medium', status: 'awaiting-approval' }
+            sample: { taskId: 'task-dishes', title: 'Unload dishwasher', assigneeMemberId: 'member-ella', dueDate: '2026-05-01', priority: 'medium', status: 'awaiting-approval' },
+            samples: {
+              happy: [
+                {
+                  id: 'happy-default',
+                  label: 'Single chore awaiting parent approval',
+                  data: { taskId: 'task-dishes', title: 'Unload dishwasher', assigneeMemberId: 'member-ella', dueDate: '2026-05-01', priority: 'medium', status: 'awaiting-approval' }
+                },
+                {
+                  id: 'happy-pending-low-priority',
+                  label: 'Pending low-priority chore for second child',
+                  data: { taskId: 'task-trash', title: 'Take trash out', assigneeMemberId: 'member-ben', dueDate: '2026-05-02', priority: 'low', status: 'pending' }
+                }
+              ],
+              negative: [
+                {
+                  id: 'negative-blank-title',
+                  reason: 'title is required and cannot be blank',
+                  data: { taskId: 'task-x', title: '', assigneeMemberId: 'member-ella', dueDate: '2026-05-01', priority: 'medium', status: 'pending' }
+                },
+                {
+                  id: 'negative-missing-assignee',
+                  reason: 'assigneeMemberId is required and cannot be null',
+                  data: { taskId: 'task-y', title: 'Sweep floor', assigneeMemberId: null, dueDate: '2026-05-01', priority: 'medium', status: 'pending' }
+                }
+              ],
+              boundary: [
+                {
+                  id: 'boundary-overdue',
+                  note: 'dueDate two weeks in the past should surface as overdue',
+                  data: { taskId: 'task-overdue', title: 'Wipe table', assigneeMemberId: 'member-ella', dueDate: '2026-04-19', priority: 'medium', status: 'overdue' }
+                },
+                {
+                  id: 'boundary-tz-shift',
+                  note: 'dueDate at midnight UTC equals 7pm Pacific the previous day',
+                  data: { taskId: 'task-tz', title: 'Empty dishwasher', assigneeMemberId: 'member-ella', dueDate: '2026-05-02T00:00:00Z', priority: 'low', status: 'pending' }
+                }
+              ],
+              rolePermission: [
+                {
+                  id: 'role-child-tries-reassign',
+                  actorId: 'child-user',
+                  reason: 'Child User must not be able to change assigneeMemberId on a task that belongs to a sibling',
+                  data: { taskId: 'task-dishes', title: 'Unload dishwasher', assigneeMemberId: 'member-ben', dueDate: '2026-05-01', priority: 'medium', status: 'awaiting-approval' }
+                }
+              ]
+            }
           }),
           entity({
             name: 'Completion Review',
