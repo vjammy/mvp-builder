@@ -5785,7 +5785,333 @@ function buildUxReviewChecklist(context: ProjectContext) {
 `;
 }
 
-function buildUiImplementationGuide(input: ProjectInput, context: ProjectContext, screens: UiScreen[]) {
+// --- Implementation surface (E3) -------------------------------------------------
+// Routes, components, test IDs, and Playwright flow specs that downstream tools
+// (browser loop, demo generator, agent build prompts) consume. The contract is
+// derived once from the inferred workflows + screens + ontology and emitted
+// into IMPLEMENTATION_CONTRACT.md, UI_IMPLEMENTATION_GUIDE.md, and per-phase
+// PLAYWRIGHT_FLOWS/*.json.
+
+type RouteEntry = { path: string; screenName: string; component: string; primaryUser: string };
+type ComponentEntry = { name: string; screenName: string; purpose: string };
+type TestIdEntry = { id: string; screenName: string; workflowStep?: string; aliases: string[] };
+type DataInterfaceEntry = { entityName: string; tsInterface: string; storageAdapter: string };
+
+type FlowStep =
+  | { kind: 'goto'; url: string; description?: string }
+  | { kind: 'click'; testId: string; description?: string }
+  | { kind: 'fill'; testId: string; valueFromSample?: string; literalValue?: string; description?: string }
+  | { kind: 'assertRoute'; match: string; description?: string }
+  | { kind: 'assertText'; testId?: string; text: string; description?: string };
+
+type FlowSpec = {
+  flowId: string;
+  actorId: string;
+  actorName: string;
+  workflowName: string;
+  reqIds: string[];
+  loginMock: { strategy: 'query-string'; param: 'as'; value: string };
+  steps: FlowStep[];
+  negativeSteps: FlowStep[];
+  rolePermissionSteps: FlowStep[];
+  notes?: string;
+};
+
+type ImplementationSurface = {
+  routes: RouteEntry[];
+  components: ComponentEntry[];
+  testIds: TestIdEntry[];
+  dataInterfaces: DataInterfaceEntry[];
+  flows: FlowSpec[];
+};
+
+function routePathForScreen(screenName: string, productName: string): string {
+  const normalized = screenName.toLowerCase().trim();
+  if (normalized.includes('entry') || normalized === productName.toLowerCase().trim()) return '/';
+  // Map common patterns to predictable paths so tests can navigate.
+  if (/^child task list$|^kid task list$/.test(normalized)) return '/kid/tasks';
+  if (/dashboard/.test(normalized) && /child|kid/.test(normalized)) return '/kid';
+  if (/dashboard/.test(normalized)) return '/dashboard';
+  if (/list|inventory|index|hub/.test(normalized)) return `/${slugify(screenName).replace(/_/g, '-')}`;
+  if (/creat|new form|form/.test(normalized)) return `/${slugify(screenName).replace(/_/g, '-').replace(/-form$/, '/new')}`;
+  if (/detail|view/.test(normalized)) return `/${slugify(screenName).replace(/_/g, '-')}/:id`;
+  if (/confirm|complete|success/.test(normalized)) return `/${slugify(screenName).replace(/_/g, '-')}`;
+  return `/${slugify(screenName).replace(/_/g, '-')}`;
+}
+
+function componentNameForScreen(screenName: string): string {
+  const cleaned = screenName.replace(/[^a-zA-Z0-9 ]/g, ' ').trim();
+  const parts = cleaned.split(/\s+/).filter(Boolean).map((p) => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase());
+  if (!parts.length) return 'Page';
+  const base = parts.join('');
+  return /Page$|View$|Form$|Screen$/.test(base) ? base : `${base}Page`;
+}
+
+function testIdForAction(screenName: string, actionPhrase: string): string {
+  const screenSlug = slugify(screenName).replace(/_/g, '-');
+  const actionSlug = slugify(actionPhrase).replace(/_/g, '-');
+  return `${screenSlug}-${actionSlug}`.replace(/-{2,}/g, '-').replace(/^-+|-+$/g, '');
+}
+
+function deriveTsType(fieldType: string): string {
+  switch (fieldType) {
+    case 'id':
+    case 'reference':
+    case 'string':
+    case 'date':
+    case 'datetime':
+      return 'string';
+    case 'number':
+      return 'number';
+    case 'boolean':
+      return 'boolean';
+    case 'enum':
+      return 'string';
+    default:
+      return 'string';
+  }
+}
+
+function buildImplementationSurface(
+  input: ProjectInput,
+  context: ProjectContext,
+  workflows: UiWorkflow[],
+  screens: UiScreen[]
+): ImplementationSurface {
+  const routes: RouteEntry[] = [];
+  const components: ComponentEntry[] = [];
+  const seenRoutes = new Set<string>();
+  for (const screen of screens) {
+    let routePath = routePathForScreen(screen.name, input.productName);
+    if (seenRoutes.has(routePath)) {
+      routePath = `${routePath.replace(/^\/+/, '/')}-${slugify(screen.name).slice(0, 20)}`;
+    }
+    seenRoutes.add(routePath);
+    const component = componentNameForScreen(screen.name);
+    routes.push({ path: routePath, screenName: screen.name, component, primaryUser: screen.primaryUser });
+    components.push({ name: component, screenName: screen.name, purpose: screen.purpose });
+  }
+
+  // Test IDs: one per (screen, primary action) plus one per (screen, secondary action)
+  // plus a per-entity-field fill testid for each entity touched by a workflow.
+  const testIds: TestIdEntry[] = [];
+  const seenTestIds = new Set<string>();
+  const pushTestId = (id: string, screenName: string, workflowStep: string | undefined, aliases: string[]) => {
+    if (!id || seenTestIds.has(id)) return;
+    seenTestIds.add(id);
+    testIds.push({ id, screenName, workflowStep, aliases });
+  };
+  for (const screen of screens) {
+    pushTestId(testIdForAction(screen.name, screen.primaryAction || 'primary'), screen.name, screen.primaryAction, [screen.primaryAction || '']);
+    for (const secondary of screen.secondaryActions || []) {
+      pushTestId(testIdForAction(screen.name, secondary), screen.name, secondary, [secondary]);
+    }
+  }
+  // Form-field testids per entity that is referenced by a workflow.
+  const referencedEntityNames = new Set<string>();
+  for (const wf of context.ontology.workflowTypes) {
+    for (const ref of wf.entityRefs) referencedEntityNames.add(ref);
+  }
+  for (const entity of context.ontology.entityTypes) {
+    if (!referencedEntityNames.has(entity.name)) continue;
+    const slug = slugify(entity.type || entity.name).replace(/_/g, '-');
+    for (const f of entity.fields.slice(0, 5)) {
+      const id = `${slug}-${slugify(f.name).replace(/_/g, '-')}`;
+      pushTestId(id, `${entity.name} form`, `Fill ${f.name}`, [f.name, ...f.aliases]);
+    }
+    pushTestId(`${slug}-submit`, `${entity.name} form`, 'Submit form', ['submit', 'save', 'create']);
+  }
+
+  // Data interfaces: one TS interface per ontology entity + a storage-adapter contract.
+  const dataInterfaces: DataInterfaceEntry[] = context.ontology.entityTypes.map((entity) => {
+    const fields = entity.fields.map((f) => `  ${f.name}: ${deriveTsType(f.type)};`).join('\n');
+    const tsInterface = `interface ${entity.name.replace(/[^a-zA-Z0-9]/g, '')} {\n${fields}\n}`;
+    const storageAdapter = `read${entity.name.replace(/[^a-zA-Z0-9]/g, '')}, list${entity.name.replace(/[^a-zA-Z0-9]/g, '')}, create${entity.name.replace(/[^a-zA-Z0-9]/g, '')}, update${entity.name.replace(/[^a-zA-Z0-9]/g, '')}`;
+    return { entityName: entity.name, tsInterface, storageAdapter };
+  });
+
+  // Flow specs: one per (actor, ontology workflow). Steps are templated from the
+  // workflow's step names plus testids derived from screens + entity fields.
+  const flows: FlowSpec[] = [];
+  for (const wf of context.ontology.workflowTypes) {
+    const primaryEntity = context.ontology.entityTypes.find((e) => wf.entityRefs.includes(e.name));
+    const sampleId = primaryEntity?.samples?.happy[0]?.id || 'happy-default';
+    const negativeSampleId = primaryEntity?.samples?.negative[0]?.id || 'negative-default';
+    const rolePermSample = primaryEntity?.samples?.rolePermission[0];
+    // Derive screens this workflow targets from the matching UI workflow if any.
+    const matchingUiWorkflow = workflows.find((uiwf) =>
+      uiwf.name.toLowerCase().includes(wf.name.toLowerCase()) ||
+      wf.aliases.some((a) => uiwf.name.toLowerCase().includes(a.toLowerCase()))
+    );
+    const targetScreens = matchingUiWorkflow?.requiredScreens || [];
+    const firstScreen = screens.find((s) => targetScreens.some((req) => req.toLowerCase() === s.name.toLowerCase()));
+    const formScreen = screens.find((s) => /form|create/i.test(s.name)) || firstScreen;
+    const submitTestId = primaryEntity ? `${slugify(primaryEntity.type || primaryEntity.name).replace(/_/g, '-')}-submit` : 'submit';
+    const targetRoute = firstScreen
+      ? routes.find((r) => r.screenName === firstScreen.name)?.path || '/'
+      : '/';
+
+    const buildSteps = (sampleSlot: 'happy' | 'negative' | 'rolePermission', sampleRecordId: string): FlowStep[] => {
+      const steps: FlowStep[] = [{ kind: 'goto', url: targetRoute, description: `Navigate to ${firstScreen?.name || 'entry screen'}` }];
+      if (formScreen && primaryEntity) {
+        const slug = slugify(primaryEntity.type || primaryEntity.name).replace(/_/g, '-');
+        for (const f of primaryEntity.fields.slice(0, 3).filter((field) => field.type === 'string' || field.type === 'date' || field.type === 'enum')) {
+          steps.push({
+            kind: 'fill',
+            testId: `${slug}-${slugify(f.name).replace(/_/g, '-')}`,
+            valueFromSample: `${primaryEntity.name}.${sampleRecordId}.${f.name}`,
+            description: `Fill ${f.name} from ${sampleSlot} sample`
+          });
+        }
+        steps.push({ kind: 'click', testId: submitTestId, description: 'Submit the form' });
+      }
+      // Final assert: for happy paths, assert a sample string value renders; for negative paths, assert an error testid is visible.
+      if (sampleSlot === 'happy' && primaryEntity) {
+        const titleField = primaryEntity.fields.find((f) => f.type === 'string' && /title|name|label/i.test(f.name));
+        if (titleField) {
+          steps.push({
+            kind: 'assertText',
+            text: String(primaryEntity.samples?.happy.find((s) => s.id === sampleRecordId)?.data[titleField.name] || titleField.example || ''),
+            description: `Confirm ${titleField.name} renders after submit`
+          });
+        }
+      } else if (sampleSlot === 'negative') {
+        steps.push({ kind: 'assertText', testId: 'form-error', text: 'required', description: 'Confirm a validation error is visible' });
+      } else if (sampleSlot === 'rolePermission') {
+        steps.push({ kind: 'assertText', testId: 'permission-denied', text: 'permission', description: 'Confirm permission denial is visible' });
+      }
+      return steps;
+    };
+
+    // Emit one flow per actor that owns this workflow. If primaryActors[] is empty, fall back to context.actors[0].
+    const actorsForWorkflow = wf.primaryActors.length
+      ? wf.primaryActors.map((name) => context.actors.find((a) => a.name === name) || context.actors[0]).filter(Boolean)
+      : [context.primaryActor];
+    for (const actor of actorsForWorkflow) {
+      if (!actor) continue;
+      const flowId = `${actor.id}-${slugify(wf.name).replace(/_/g, '-')}`;
+      flows.push({
+        flowId,
+        actorId: actor.id,
+        actorName: actor.name,
+        workflowName: wf.name,
+        reqIds: context.ontology.featureScenarios
+          .map((s, idx) => (s.workflow?.name === wf.name ? `REQ-${idx + 1}` : null))
+          .filter((x): x is string => x !== null),
+        loginMock: { strategy: 'query-string', param: 'as', value: actor.id },
+        steps: buildSteps('happy', sampleId),
+        negativeSteps: buildSteps('negative', negativeSampleId),
+        rolePermissionSteps: rolePermSample && rolePermSample.actorId === actor.id ? buildSteps('rolePermission', rolePermSample.id) : [],
+        notes: matchingUiWorkflow ? undefined : 'No matching UI workflow found; steps are derived from the ontology workflow.'
+      });
+    }
+  }
+
+  return { routes, components, testIds, dataInterfaces, flows };
+}
+
+function buildImplementationContract(
+  input: ProjectInput,
+  context: ProjectContext,
+  surface: ImplementationSurface
+): string {
+  const routesBlock = surface.routes.length
+    ? surface.routes.map((r) => `| \`${r.path}\` | ${r.screenName} | \`${r.component}\` | ${r.primaryUser} |`).join('\n')
+    : '| `/` | (no UI declared) | `App` | (none) |';
+  const componentsBlock = surface.components.length
+    ? surface.components.map((c) => `| \`${c.name}\` | ${c.screenName} | ${c.purpose} |`).join('\n')
+    : '| `App` | (no UI declared) | Placeholder shell |';
+  const interfacesBlock = surface.dataInterfaces.length
+    ? surface.dataInterfaces
+        .map((d) => `### ${d.entityName}\n\n\`\`\`ts\n${d.tsInterface}\n\`\`\`\n\n- Storage adapter contract: \`${d.storageAdapter}\``)
+        .join('\n\n')
+    : '_No domain entities inferred yet._';
+  const testIdsBlock = surface.testIds.length
+    ? surface.testIds.map((t) => `| \`${t.id}\` | ${t.screenName} | ${t.workflowStep || '-'} | ${(t.aliases || []).filter(Boolean).slice(0, 4).join(', ') || '-'} |`).join('\n')
+    : '| `app-root` | App shell | - | - |';
+  const flowsBlock = surface.flows.length
+    ? surface.flows
+        .map(
+          (f) => `- \`${f.flowId}\` — ${f.actorName} → ${f.workflowName} → ${f.reqIds.join(', ') || 'no REQs'}`
+        )
+        .join('\n')
+    : '- No flows generated. Add UI workflows to surface flow specs.';
+
+  return `# IMPLEMENTATION_CONTRACT
+
+## What this file is for
+The single source of truth for stable contracts every downstream builder consumes — the agent that writes the app, the demo generator, the browser loop, and the autoresearch probes. Treat the entries here as a contract: the agent must wire the same routes, components, test IDs, and storage adapters; the loop reads the same names back to drive the running app. If this file is wrong, every outcome-based check downstream is wrong.
+
+## Mock auth
+- Strategy: query-string (default). Append \`?as=<actorId>\` to any URL to scope the session to that actor.
+- Recognized actor IDs: ${context.actors.map((a) => `\`${a.id}\``).join(', ') || 'none'}.
+- The agent must implement a reader (server- or client-side) that picks up \`?as=\` and sets the current actor for the session. Without this, the per-actor browser flows cannot exercise role boundaries.
+
+## Route map
+| Route | Screen | Component | Primary user |
+| --- | --- | --- | --- |
+${routesBlock}
+
+## Component map
+| Component | Screen | Purpose |
+| --- | --- | --- |
+${componentsBlock}
+
+## Data contract
+
+${interfacesBlock}
+
+## Test ID glossary
+| testid | Screen | Workflow step | Aliases |
+| --- | --- | --- | --- |
+${testIdsBlock}
+
+## Per-actor flow specs
+${flowsBlock}
+
+Per-flow JSON files live under \`phases/phase-NN/PLAYWRIGHT_FLOWS/<actor-id>-<workflow-slug>.json\` (one entry per phase that owns the matching REQ-IDs). Each file declares loginMock + ordered steps + negativeSteps + rolePermissionSteps. The \`npm run loop:browser\` runner consumes them.
+
+## Empty / loading / error states (per screen)
+${surface.routes.length ? surface.routes.map((r) => `- ${r.screenName} (\`${r.path}\`): empty / loading / error states must each render distinctly so the loop can tell them apart.`).join('\n') : '- No screens declared yet.'}
+
+## What this contract does not promise
+- It does not specify visual design, copy, or content tone.
+- It does not constrain database choice or hosting.
+- It does not enforce API protocol; it only declares the storage-adapter operations each entity needs.
+`;
+}
+
+function buildPlaywrightFlowsForPhase(phase: PhasePlan, surface: ImplementationSurface): { path: string; content: string }[] {
+  const phaseReqIds = new Set(phase.requirementIds || []);
+  if (!phaseReqIds.size) return [];
+  const out: { path: string; content: string }[] = [];
+  for (const flow of surface.flows) {
+    const flowReqs = flow.reqIds.filter((r) => phaseReqIds.has(r));
+    if (!flowReqs.length) continue;
+    const slug = phase.slug;
+    const file = `phases/${slug}/PLAYWRIGHT_FLOWS/${flow.flowId}.json`;
+    const payload = {
+      schemaVersion: 1,
+      flowId: flow.flowId,
+      actorId: flow.actorId,
+      actorName: flow.actorName,
+      workflowName: flow.workflowName,
+      reqIds: flowReqs,
+      loginMock: flow.loginMock,
+      steps: flow.steps,
+      negativeSteps: flow.negativeSteps,
+      rolePermissionSteps: flow.rolePermissionSteps,
+      notes: flow.notes || undefined
+    };
+    out.push({ path: file, content: `${JSON.stringify(payload, null, 2)}\n` });
+  }
+  return out;
+}
+
+function buildUiImplementationGuide(input: ProjectInput, context: ProjectContext, screens: UiScreen[], surface?: ImplementationSurface) {
+  const testIdsBlock = surface && surface.testIds.length
+    ? surface.testIds.map((t) => `| \`${t.id}\` | ${t.screenName} | ${t.workflowStep || '-'} | ${(t.aliases || []).filter(Boolean).slice(0, 4).join(', ') || '-'} |`).join('\n')
+    : '| `app-root` | App shell | - | - |';
   return `# UI_IMPLEMENTATION_GUIDE
 
 ## Recommended component structure
@@ -5841,6 +6167,13 @@ function buildUiImplementationGuide(input: ProjectInput, context: ProjectContext
 - ${CORE_AGENT_OPERATING_RULES.split('\n').slice(2).join('\n- ')}
 - If a screen detail is unclear, surface the tradeoff instead of inventing more product.
 - Build only the minimum code that proves the current screen and workflow.
+
+## Test ID glossary
+The browser loop and the demo generator both key off these stable IDs. Wire \`data-testid\` attributes on the matching DOM elements so tests do not depend on visible copy.
+
+| testid | Screen | Workflow step | Aliases |
+| --- | --- | --- | --- |
+${testIdsBlock}
 `;
 }
 
@@ -8700,8 +9033,9 @@ If ${context.profile.label} produces a CLI, library, or batch process, replace t
 `;
 }
 
-function buildBrowserAutomationGuide(input: ProjectInput, _context: ProjectContext) {
+function buildBrowserAutomationGuide(input: ProjectInput, context: ProjectContext) {
   const target = resolveRuntimeTarget(input);
+  const actorIdsLine = context.actors.length ? context.actors.map((a) => `\`${a.id}\``).join(', ') : 'no actors declared';
   return `# BROWSER_AUTOMATION_GUIDE
 
 ## What this file is for
@@ -8767,6 +9101,20 @@ Run all of these against ${target.url} and the routes listed in RUNTIME_TARGET.m
 
 ## Why two options instead of one
 Forcing Playwright as a hard dependency would bloat MVP Builder itself with browser binaries. Forcing chrome-devtools MCP would exclude agents that do not have it. Documenting both keeps the harness portable, and the assertion checklist above is identical regardless of tooling.
+
+## Mock auth contract
+The per-actor browser flows under \`phases/phase-NN/PLAYWRIGHT_FLOWS/*.json\` rely on a mock-auth handshake instead of a real auth system. The agent that builds the app must wire it.
+
+- Strategy: query-string. Append \`?as=<actorId>\` to any navigation; the app reads the value and sets the current actor for the session.
+- Recognized actor IDs for ${input.productName}: ${actorIdsLine}.
+- Persist the actor across navigations until it is replaced or cleared. A common implementation: a server-side or middleware reader that copies \`?as=\` into a cookie or in-memory session, plus a clear path to remove it.
+- The app must reject actions an actor is not allowed to take and surface a \`data-testid="permission-denied"\` element so role-permission flows can assert the rejection.
+- The app must surface form validation errors via \`data-testid="form-error"\` so negative-path flows can assert on the failure mode without depending on copy.
+
+Why this exists: real authentication is out of scope for the MVP planning workspace. The browser loop must still exercise per-actor permission boundaries. Mock auth is the documented contract that makes that possible without a real identity provider.
+
+## How the per-actor flow runner uses this guide
+\`npm run loop:browser\` discovers every \`phases/phase-NN/PLAYWRIGHT_FLOWS/*.json\` file, opens a clean Playwright context per flow, applies the mock-auth strategy declared in the flow JSON, and runs the steps in order. Each REQ-ID owned by the flow advances from \`uncovered\` to \`covered\` only when the happy steps pass AND a corresponding negative or role-permission flow ran without leaking.
 `;
 }
 
@@ -8817,6 +9165,7 @@ function createGeneratedFiles(bundle: ProjectBundle, input: ProjectInput, contex
   const mvpBuilderState = buildMvpBuilderState(bundle);
   const uiWorkflows = getUiWorkflowSet(input, context);
   const uiScreens = getUiScreens(input, context, uiWorkflows);
+  const implementationSurface = buildImplementationSurface(input, context, uiWorkflows, uiScreens);
 
   add('README.md', buildRootReadme(bundle, input));
   add('BUSINESS_USER_START_HERE.md', buildBusinessUserStartHere(bundle, input));
@@ -8905,11 +9254,12 @@ function createGeneratedFiles(bundle: ProjectBundle, input: ProjectInput, contex
   add('architecture/STATE_MANAGEMENT.md', buildStateManagement(input, context));
   add('architecture/ARCHITECTURE_DECISIONS.md', buildArchitectureDecisions(input, context));
   add('architecture/ARCHITECTURE_GATE.md', buildArchitectureGate());
+  add('architecture/IMPLEMENTATION_CONTRACT.md', buildImplementationContract(input, context, implementationSurface));
   add('ui-ux/UI_UX_START_HERE.md', buildUiUxStartHere(input, context, uiWorkflows));
   add('ui-ux/USER_WORKFLOWS.md', `# USER_WORKFLOWS\n\n${uiWorkflows.map(renderUiWorkflowMarkdown).join('\n')}`);
   add('ui-ux/SCREEN_INVENTORY.md', `# SCREEN_INVENTORY\n\n${uiScreens.map(renderUiScreenMarkdown).join('\n')}`);
   add('ui-ux/UX_REVIEW_CHECKLIST.md', buildUxReviewChecklist(context));
-  add('ui-ux/UI_IMPLEMENTATION_GUIDE.md', buildUiImplementationGuide(input, context, uiScreens));
+  add('ui-ux/UI_IMPLEMENTATION_GUIDE.md', buildUiImplementationGuide(input, context, uiScreens, implementationSurface));
   add('ui-ux/ACCESSIBILITY_CHECKLIST.md', buildAccessibilityChecklist());
   add('ui-ux/RESPONSIVE_DESIGN_CHECKLIST.md', buildResponsiveChecklist());
   add('ui-ux/SCREENSHOT_REVIEW_PROMPT.md', buildScreenshotReviewPrompt(input, context));
@@ -9245,6 +9595,9 @@ ${listToBullets(bundle.unresolvedWarnings.map((warning) => `[${warning.severity}
     add(`phases/${phase.slug}/TEST_RESULTS.md`, buildPhaseTestResults(phase));
     add(`phases/${phase.slug}/HANDOFF_SUMMARY.md`, buildPhaseHandoffSummary(phase, input, context));
     add(`phases/${phase.slug}/NEXT_PHASE_CONTEXT.md`, buildNextPhaseContext(phase, nextPhase, input, context));
+    for (const flowFile of buildPlaywrightFlowsForPhase(phase, implementationSurface)) {
+      add(flowFile.path, flowFile.content);
+    }
     add(
       `gates/gate-${gateNumber}-entry.md`,
       `# Gate ${gateNumber} Entry
