@@ -9540,6 +9540,7 @@ ${listToBullets(bundle.unresolvedWarnings.map((warning) => `[${warning.severity}
         readinessScore: bundle.score.total,
         rating: bundle.score.rating,
         lifecycleStatus: bundle.lifecycleStatus,
+        researchSource: input.researchSource || 'manual',
         phaseCount: bundle.phases.length,
         primaryAudience: context.primaryAudience,
         primaryFeature: context.primaryFeature,

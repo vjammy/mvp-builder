@@ -491,19 +491,26 @@ export function runProbes(packageRoot: string, rubric: ProbeRubric): ProbeReport
 // boundary-and-role-test-presence probe minimum.
 // ---------------------------------------------------------------------------
 
+export type ResearchSourceTier = 'synthesized' | 'manual' | 'agent-recipe' | 'imported-real' | 'unknown';
+
 export type ReadinessLabels = {
   artifactQuality: { score: number; max: number; label: string };
   buildApproval: { lifecycleStatus: string; approved: boolean; label: string };
   demoReadiness: { ready: boolean; label: string; reason?: string };
+  researchSource: { tier: ResearchSourceTier; label: string; demoEligible: boolean };
 };
+
+const DEMO_ELIGIBLE_TIERS: ResearchSourceTier[] = ['agent-recipe', 'imported-real'];
 
 export function deriveReadinessLabels(packageRoot: string, probeReport: ProbeReport): ReadinessLabels {
   const manifestPath = path.join(packageRoot, 'repo', 'manifest.json');
   let lifecycleStatus = 'unknown';
+  let researchSource: ResearchSourceTier = 'unknown';
   if (fs.existsSync(manifestPath)) {
     try {
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as { lifecycleStatus?: string };
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as { lifecycleStatus?: string; researchSource?: ResearchSourceTier };
       lifecycleStatus = manifest.lifecycleStatus || 'unknown';
+      researchSource = manifest.researchSource || 'manual';
     } catch {
       // ignore
     }
@@ -513,15 +520,32 @@ export function deriveReadinessLabels(packageRoot: string, probeReport: ProbeRep
     ? 'Build approved'
     : `Build NOT approved (lifecycle=${lifecycleStatus})`;
 
+  const sourceDemoEligible = DEMO_ELIGIBLE_TIERS.includes(researchSource);
+  const sourceLabel = (() => {
+    switch (researchSource) {
+      case 'synthesized': return 'Synthesized (harness-only; never demo-ready)';
+      case 'manual': return 'Manual (human-entered, uncited; harness-ready)';
+      case 'agent-recipe': return 'Agent-recipe (agent reasoning; demo-eligible)';
+      case 'imported-real': return 'Imported-real (externally sourced/cited; demo-eligible)';
+      default: return 'Unknown';
+    }
+  })();
+
   const boundaryProbe = probeReport.probes.find((p) => p.name === 'boundary-and-role-test-presence');
   const sampleCoverageProbe = probeReport.probes.find((p) => p.name === 'sample-data-coverage-per-actor');
   const artifactScore = probeReport.finalScore;
   const artifactMax = probeReport.totalMax;
   const artifactPct = artifactMax ? Math.round((artifactScore / artifactMax) * 100) : 0;
 
-  let demoReady = artifactPct >= 75 && approved;
+  // Demo readiness now ANDs research source eligibility on top of artifact quality
+  // and build approval. Synthesized harness output is never labelled demo-ready
+  // regardless of probe scores (Codex 30-idea Recommendation #2).
+  let demoReady = artifactPct >= 75 && approved && sourceDemoEligible;
   let demoReason: string | undefined;
-  if (!boundaryProbe || boundaryProbe.score === 0) {
+  if (!sourceDemoEligible) {
+    demoReady = false;
+    demoReason = `research source is ${researchSource} (must be agent-recipe or imported-real)`;
+  } else if (!boundaryProbe || boundaryProbe.score === 0) {
     demoReady = false;
     demoReason = 'no boundary or role-permission samples';
   } else if (sampleCoverageProbe && sampleCoverageProbe.ratio < 0.5) {
@@ -546,6 +570,7 @@ export function deriveReadinessLabels(packageRoot: string, probeReport: ProbeRep
       ready: demoReady,
       label: demoReady ? 'Demo-ready' : `Not demo-ready (${demoReason || 'see probes'})`,
       reason: demoReason
-    }
+    },
+    researchSource: { tier: researchSource, label: sourceLabel, demoEligible: sourceDemoEligible }
   };
 }

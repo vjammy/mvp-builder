@@ -316,8 +316,11 @@ async function main() {
 
   for (const useCase of USE_CASES) {
     const outDir = path.join(runRoot, useCase.key);
+    // Tag autoresearch-driven inputs as 'synthesized' so the demo-readiness
+    // label correctly refuses to call them client-ready regardless of probe
+    // scores. The Codex 30-idea report flagged this exact ambiguity.
     const created = await createArtifactPackage({
-      input: useCase.input,
+      input: { ...useCase.input, researchSource: 'synthesized' },
       outDir,
       zip: false
     });
@@ -377,16 +380,17 @@ ${useCaseScores
   .join('\n')}
 
 ## Per-use-case scores (E4 content-quality probes)
-| Use case | Artifact quality | Build approval | Demo readiness | Triggered caps |
-| --- | --- | --- | --- | --- |
+| Use case | Artifact quality | Research source | Build approval | Demo readiness | Triggered caps |
+| --- | --- | --- | --- | --- | --- |
 ${useCaseScores
   .map((item) => {
     const r = item.readiness;
     const aq = r ? `${r.artifactQuality.score}/${r.artifactQuality.max}` : 'n/a';
+    const rs = r ? `${r.researchSource.tier}${r.researchSource.demoEligible ? '' : ' (harness-only)'}` : 'n/a';
     const ba = r ? (r.buildApproval.approved ? `approved (${r.buildApproval.lifecycleStatus})` : `blocked (${r.buildApproval.lifecycleStatus})`) : 'n/a';
     const dr = r ? (r.demoReadiness.ready ? 'ready' : `not ready (${r.demoReadiness.reason || 'see probes'})`) : 'n/a';
     const caps = item.probeReport?.triggeredCaps.join('; ') || '-';
-    return `| ${item.name} | ${aq} | ${ba} | ${dr} | ${caps} |`;
+    return `| ${item.name} | ${aq} | ${rs} | ${ba} | ${dr} | ${caps} |`;
   })
   .join('\n')}
 

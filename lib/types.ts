@@ -12,6 +12,13 @@ export type Actor = {
   aliases?: string[];
 };
 
+// Phase 6 (follow-on): research source tier. Synthesized harness output should
+// never be reported as demo-ready regardless of artifact-quality probe scores.
+// agent-recipe is for agent-driven research with explicit reasoning. manual
+// is the default when a human wrote the brief but no external research was
+// cited. imported-real is for externally sourced or cited research data.
+export type ResearchSource = 'synthesized' | 'manual' | 'agent-recipe' | 'imported-real';
+
 export type ProjectInput = {
   productName: string;
   level: ExperienceLevel;
@@ -35,6 +42,7 @@ export type ProjectInput = {
   runtimeStartCommand?: string;
   runtimeSmokeRoutes?: string[];
   runtimeStartTimeoutMs?: number;
+  researchSource?: ResearchSource;
 };
 
 export type RuntimeTarget = {
