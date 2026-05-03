@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createArtifactPackage } from './mvp-builder-create-project';
 import { USE_CASES } from './test-quality-regression';
+import { deriveReadinessLabels, loadProbeRubric, runProbes, type ProbeReport, type ReadinessLabels } from './autoresearch-probes';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -33,6 +34,8 @@ type UseCaseScore = {
   cap: number | null;
   triggeredCaps: string[];
   breakdown: Record<string, number>;
+  probeReport?: ProbeReport;
+  readiness?: ReadinessLabels;
 };
 
 function ensureDir(dirPath: string) {
@@ -335,7 +338,15 @@ async function main() {
         ROOT
       )
     );
-    useCaseScores.push(scoreUseCase(created.rootDir, useCase));
+    const score = scoreUseCase(created.rootDir, useCase);
+    try {
+      const rubric = loadProbeRubric(path.join(AUTORESEARCH_DIR, 'rubrics', 'probes.json'));
+      score.probeReport = runProbes(created.rootDir, rubric);
+      score.readiness = deriveReadinessLabels(created.rootDir, score.probeReport);
+    } catch (err) {
+      console.warn(`Probe run failed for ${useCase.key}: ${(err as Error).message}`);
+    }
+    useCaseScores.push(score);
   }
 
   const overallScore = Math.round(useCaseScores.reduce((sum, item) => sum + item.finalScore, 0) / useCaseScores.length);
@@ -358,12 +369,37 @@ async function main() {
 - Package validation status: ${packageValidationResults.every((item) => item.passed) ? 'PASS' : 'FAIL'}
 - Package regression status: ${packageRegressionResults.every((item) => item.passed) ? 'PASS' : 'FAIL'}
 
-## Per-use-case scores
+## Per-use-case scores (legacy rubric — file presence)
 | Use case | Score | Raw | Cap | Triggered caps |
 | --- | --- | --- | --- | --- |
 ${useCaseScores
   .map((item) => `| ${item.name} | ${item.finalScore} | ${item.rawScore} | ${item.cap ?? '-'} | ${item.triggeredCaps.join('; ') || '-'} |`)
   .join('\n')}
+
+## Per-use-case scores (E4 content-quality probes)
+| Use case | Artifact quality | Build approval | Demo readiness | Triggered caps |
+| --- | --- | --- | --- | --- |
+${useCaseScores
+  .map((item) => {
+    const r = item.readiness;
+    const aq = r ? `${r.artifactQuality.score}/${r.artifactQuality.max}` : 'n/a';
+    const ba = r ? (r.buildApproval.approved ? `approved (${r.buildApproval.lifecycleStatus})` : `blocked (${r.buildApproval.lifecycleStatus})`) : 'n/a';
+    const dr = r ? (r.demoReadiness.ready ? 'ready' : `not ready (${r.demoReadiness.reason || 'see probes'})`) : 'n/a';
+    const caps = item.probeReport?.triggeredCaps.join('; ') || '-';
+    return `| ${item.name} | ${aq} | ${ba} | ${dr} | ${caps} |`;
+  })
+  .join('\n')}
+
+## Probe breakdowns (E4)
+${useCaseScores
+  .map((item) => {
+    if (!item.probeReport) return `### ${item.name}\n\n_No probe report._`;
+    const rows = item.probeReport.probes
+      .map((p) => `| ${p.name} | ${p.score}/${p.max} | ${p.notes.join('; ') || '-'} |`)
+      .join('\n');
+    return `### ${item.name}\n\n| Probe | Score | Notes |\n| --- | --- | --- |\n${rows}`;
+  })
+  .join('\n\n')}
 
 ## Score breakdowns
 ${useCaseScores
