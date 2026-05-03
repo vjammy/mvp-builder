@@ -6,6 +6,7 @@ node_modules
 *.tsbuildinfo
 .tmp-*
 .temp/
+.eval/
 
 # Generated workspace artifacts
 # These are output of `npm run create-project` and the orchestrator.
