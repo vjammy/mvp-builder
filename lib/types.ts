@@ -5,12 +5,20 @@ export type CritiqueSeverity = 'critical' | 'important' | 'nice-to-have';
 export type WarningSeverity = 'info' | 'warning' | 'blocker';
 export type LifecycleStatus = 'Draft' | 'Blocked' | 'ReviewReady' | 'ApprovedForBuild' | 'InRework';
 
+export type Actor = {
+  id: string;
+  name: string;
+  role?: string;
+  aliases?: string[];
+};
+
 export type ProjectInput = {
   productName: string;
   level: ExperienceLevel;
   track: UserTrack;
   productIdea: string;
   targetAudience: string;
+  actors?: Actor[];
   problemStatement: string;
   constraints: string;
   desiredOutput: string;

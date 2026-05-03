@@ -751,11 +751,13 @@ function chooseIntegrationsForFeature(feature: string, integrations: OntologyInt
 }
 
 function chooseActorForFeature(feature: string, workflowChoice: OntologyWorkflow, actors: OntologyActor[]) {
+  const featureMatch = actors.find((candidate) =>
+    candidate.aliases.some((alias) => containsAny(feature, [alias]))
+  );
+  if (featureMatch) return featureMatch;
   const workflowActor = workflowChoice.primaryActors[0];
-  const matched =
-    actors.find((candidate) => candidate.name === workflowActor) ||
-    actors.find((candidate) => candidate.aliases.some((alias) => containsAny(feature, [alias])));
-  return matched || actors[0];
+  const workflowMatch = actors.find((candidate) => candidate.name === workflowActor);
+  return workflowMatch || actors[0];
 }
 
 function chooseScenarioType(

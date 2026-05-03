@@ -11,6 +11,7 @@ import {
   type RiskFlag
 } from './domain-ontology';
 import type {
+  Actor,
   CritiqueItem,
   GeneratedFile,
   LifecycleStatus,
@@ -73,6 +74,8 @@ type ProjectContext = {
   keywords: string[];
   answers: Record<string, string>;
   primaryAudience: string;
+  actors: Actor[];
+  primaryActor: Actor;
   primaryFeature: string;
   secondaryFeature: string;
   outputAnchor: string;
@@ -99,6 +102,43 @@ function splitItems(value: string) {
     .split(/\n|,/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function resolveActors(input: ProjectInput, audienceSegments: string[], ontology: DomainOntology): Actor[] {
+  if (input.actors && input.actors.length) {
+    return input.actors.map((actor) => ({
+      ...actor,
+      id: actor.id ? slugify(actor.id) : slugify(actor.name)
+    }));
+  }
+  const seen = new Set<string>();
+  const fromAudience: Actor[] = [];
+  for (const segment of audienceSegments) {
+    const ontologyMatch = ontology.actorTypes.find((candidate) =>
+      candidate.aliases.some((alias) => segment.toLowerCase().includes(alias.toLowerCase()))
+    );
+    const name = ontologyMatch?.name || segment;
+    const id = slugify(ontologyMatch?.type || name);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    fromAudience.push({
+      id,
+      name,
+      role: ontologyMatch?.type,
+      aliases: ontologyMatch?.aliases
+    });
+  }
+  if (fromAudience.length) return fromAudience;
+  // Fallback: project at least one actor from the ontology so downstream code has a stable ID.
+  if (ontology.actorTypes.length) {
+    return ontology.actorTypes.slice(0, 3).map((actor) => ({
+      id: slugify(actor.type || actor.name),
+      name: actor.name,
+      role: actor.type,
+      aliases: actor.aliases
+    }));
+  }
+  return [{ id: 'primary-user', name: 'the primary target user' }];
 }
 
 function wordCount(value: string) {
@@ -914,6 +954,8 @@ function buildContext(input: ProjectInput): ProjectContext {
     nonGoals,
     constraints
   });
+  const actors = resolveActors(input, audienceSegments, ontology);
+  const primaryActor = actors[0];
 
   const inferredAssumptions: string[] = [];
   if (!integrations.length) {
@@ -940,7 +982,9 @@ function buildContext(input: ProjectInput): ProjectContext {
     audienceSegments,
     keywords,
     answers,
-    primaryAudience: audienceSegments[0] || 'the primary target user',
+    primaryAudience: primaryActor?.name || audienceSegments[0] || 'the primary target user',
+    actors,
+    primaryActor: primaryActor || { id: 'primary-user', name: audienceSegments[0] || 'the primary target user' },
     primaryFeature: mustHaves[0] || truncateText(input.desiredOutput, 8) || input.productName,
     secondaryFeature: mustHaves[1] || truncateText(input.productIdea, 8),
     outputAnchor: truncateText(input.desiredOutput || input.productIdea, 10),
@@ -1509,7 +1553,7 @@ function buildFunctionalRequirements(input: ProjectInput, context: ProjectContex
         {
           feature: context.primaryFeature,
           scenarioType: 'record-create',
-          actor: { name: context.primaryAudience, type: 'primary-user', aliases: [], responsibilities: [], visibility: [] },
+          actor: { name: context.primaryActor.name, type: context.primaryActor.id, aliases: [], responsibilities: [], visibility: [] },
           workflow: context.ontology.workflowTypes[0],
           entities: [],
           fields: [],
@@ -1529,6 +1573,7 @@ ${scenarios
       (scenario, index) => `## Requirement ${index + 1}: ${sentenceCase(scenario.feature)}
 
 - Actor: ${scenario.actor.name}
+- Actor ID: ${slugify(scenario.actor.type || scenario.actor.name)}
 - User action: ${scenario.userAction}
 - System response: ${scenario.systemResponse}
 - Stored data: ${scenario.storedData}
@@ -1573,7 +1618,7 @@ function buildAcceptanceCriteria(input: ProjectInput, context: ProjectContext, p
         {
           feature: context.primaryFeature,
           scenarioType: 'record-create',
-          actor: { name: context.primaryAudience, type: 'primary-user', aliases: [], responsibilities: [], visibility: [] },
+          actor: { name: context.primaryActor.name, type: context.primaryActor.id, aliases: [], responsibilities: [], visibility: [] },
           workflow: context.ontology.workflowTypes[0],
           entities: [],
           fields: [],
@@ -1602,8 +1647,10 @@ ${scenarios
         return `## ${index + 1}. ${sentenceCase(safeScenario.feature)}
 
 - Requirement ID: REQ-${index + 1}
+- Actor: ${safeScenario.actor.name}
+- Actor ID: ${slugify(safeScenario.actor.type || safeScenario.actor.name)}
 - Clear pass/fail check: ${safeScenario.testableOutcome}
-- Given: ${values?.actorExample || context.primaryAudience} has ${entityName} data prepared with ${sampleSummary}.
+- Given: ${values?.actorExample || safeScenario.actor.name || context.primaryAudience} has ${entityName} data prepared with ${sampleSummary}.
 - When: ${safeScenario.userAction}
 - Then: ${safeScenario.systemResponse}
 - Negative case: ${safeScenario.failureCase}
@@ -5420,11 +5467,15 @@ function getUiWorkflowSet(input: ProjectInput, context: ProjectContext): UiWorkf
           businessRisk: 'Poor exception handling creates refunds, bad reviews, and staff support burden.'
         }
       ];
-    default:
+    default: {
+      const primaryWorkflowActor = context.ontology.workflowTypes[0]?.primaryActors[0] || context.primaryActor.name;
+      const reviewWorkflowActor =
+        context.ontology.workflowTypes.find((wf) => /review|approval|dashboard|status/i.test(wf.name))?.primaryActors[0] ||
+        (context.actors[1]?.name || context.primaryActor.name);
       return [
         {
           name: `${sentenceCase(context.primaryFeature)} primary workflow`,
-          targetUser: context.primaryAudience,
+          targetUser: primaryWorkflowActor,
           goal: `Complete the main ${input.productName} workflow without needing hidden chat context or side-channel explanation.`,
           startPoint: `User opens the first screen for ${input.productName}.`,
           happyPath: [
@@ -5441,12 +5492,12 @@ function getUiWorkflowSet(input: ProjectInput, context: ProjectContext): UiWorkf
             'The workflow ends without a clear success confirmation.'
           ],
           requiredScreens: ['Entry screen', 'Primary workflow screen', 'Confirmation state'],
-          successCriteria: `A first-time ${context.primaryAudience} user can complete the primary workflow on the first attempt.`,
+          successCriteria: `A first-time ${primaryWorkflowActor} user can complete the primary workflow on the first attempt.`,
           businessRisk: 'If the main flow is confusing, the project fails at the exact moment it is supposed to prove value.'
         },
         {
           name: 'Status, review, or admin follow-through',
-          targetUser: context.primaryAudience,
+          targetUser: reviewWorkflowActor,
           goal: `Review outcomes, exceptions, and next actions after the main ${context.primaryFeature} step.`,
           startPoint: 'User returns after the first action is submitted.',
           happyPath: [
@@ -5461,6 +5512,7 @@ function getUiWorkflowSet(input: ProjectInput, context: ProjectContext): UiWorkf
           businessRisk: 'If review state is unclear, teams create manual side workflows and the product stops being trusted.'
         }
       ];
+    }
   }
 }
 
@@ -5484,11 +5536,29 @@ function getUiScreens(input: ProjectInput, context: ProjectContext, workflows: U
     ];
   }
 
+  // Build a map of screenName → owning workflows so each screen can attribute its primary user to the workflow's targetUser.
+  const screenOwners = new Map<string, UiWorkflow[]>();
+  for (const workflow of workflows) {
+    for (const screenName of workflow.requiredScreens) {
+      const key = screenName.toLowerCase();
+      const owners = screenOwners.get(key) || [];
+      if (!owners.includes(workflow)) owners.push(workflow);
+      screenOwners.set(key, owners);
+    }
+  }
+  const ownersFor = (screenName: string): string => {
+    const owners = screenOwners.get(screenName.toLowerCase()) || [];
+    if (!owners.length) return context.primaryActor.name;
+    const names = Array.from(new Set(owners.map((w) => w.targetUser)));
+    return names.join(', ');
+  };
+
+  const entryWorkflowUser = workflows[0]?.targetUser || context.primaryActor.name;
   const baseScreens: UiScreen[] = [
     {
       name: `${input.productName} entry screen`,
-      purpose: `Orient ${context.primaryAudience} and make the first step obvious.`,
-      primaryUser: context.primaryAudience,
+      purpose: `Orient ${entryWorkflowUser} and make the first step obvious.`,
+      primaryUser: entryWorkflowUser,
       primaryAction: `Start the ${workflows[0]?.name.toLowerCase() || context.primaryFeature} workflow`,
       secondaryActions: ['Review status summary', 'Open help or onboarding cues'],
       requiredData: ['Headline that explains value', 'Current state summary', 'Primary call to action'],
@@ -5504,10 +5574,11 @@ function getUiScreens(input: ProjectInput, context: ProjectContext, workflows: U
   const workflowScreens = Array.from(new Set(workflows.flatMap((workflow) => workflow.requiredScreens))).slice(0, 5);
   for (const screenName of workflowScreens) {
     if (baseScreens.some((screen) => screen.name.toLowerCase() === screenName.toLowerCase())) continue;
+    const screenUser = ownersFor(screenName);
     baseScreens.push({
       name: screenName,
-      purpose: `Support the ${screenName.toLowerCase()} step inside ${input.productName}.`,
-      primaryUser: context.primaryAudience,
+      purpose: `Support the ${screenName.toLowerCase()} step inside ${input.productName} for ${screenUser}.`,
+      primaryUser: screenUser,
       primaryAction: `Complete the key action for ${screenName.toLowerCase()}.`,
       secondaryActions: ['Review supporting details', 'Back out safely without losing context'],
       requiredData: [`Data needed to complete ${screenName.toLowerCase()}`, 'Current status', 'Next-step guidance'],
@@ -6833,7 +6904,12 @@ function buildSampleData(input: ProjectInput, context: ProjectContext, phases: P
     if (firstStringField) negativeSample[firstStringField.name] = '';
     if (firstIdField) negativeSample[firstIdField.name] = null;
     const negativeJson = JSON.stringify(negativeSample, null, 2);
-    const reqIds = (reqIndexByEntity.get(entity.name) || []).map((idx) => `REQ-${idx + 1}`);
+    const reqIndices = reqIndexByEntity.get(entity.name) || [];
+    const reqIds = reqIndices.map((idx) => {
+      const scenario = scenarios[idx];
+      const actorId = scenario ? slugify(scenario.actor.type || scenario.actor.name) : '';
+      return actorId ? `REQ-${idx + 1} (${actorId})` : `REQ-${idx + 1}`;
+    });
     const reqLine = reqIds.length ? reqIds.join(', ') : 'No direct requirement reference yet.';
     const owningPhases = unique(
       (reqIndexByEntity.get(entity.name) || []).map((idx) => getRequirementPhaseSlug(idx, phases))
