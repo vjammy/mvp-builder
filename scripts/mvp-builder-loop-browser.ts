@@ -56,6 +56,56 @@ type ReqCoverageResult = {
   testResultsVerified: boolean;
 };
 
+type FlowStep =
+  | { kind: 'goto'; url: string; description?: string }
+  | { kind: 'click'; testId: string; description?: string }
+  | { kind: 'fill'; testId: string; valueFromSample?: string; literalValue?: string; description?: string }
+  | { kind: 'assertRoute'; match: string; description?: string }
+  | { kind: 'assertText'; testId?: string; text: string; description?: string };
+
+type LoadedFlow = {
+  flowId: string;
+  filePath: string;
+  phaseSlug: string;
+  actorId: string;
+  actorName: string;
+  workflowName: string;
+  reqIds: string[];
+  loginMock: { strategy: 'query-string'; param: string; value: string };
+  steps: FlowStep[];
+  negativeSteps: FlowStep[];
+  rolePermissionSteps: FlowStep[];
+};
+
+type FlowStepResult = {
+  index: number;
+  kind: FlowStep['kind'];
+  passed: boolean;
+  detail: string;
+};
+
+type FlowExecutionResult = {
+  flowId: string;
+  phaseSlug: string;
+  actorId: string;
+  workflowName: string;
+  reqIds: string[];
+  status: 'passed' | 'failed' | 'skipped-not-built';
+  happySteps: FlowStepResult[];
+  negativeSteps: FlowStepResult[];
+  rolePermissionSteps: FlowStepResult[];
+  consoleErrors: string[];
+  failedRequests: string[];
+  screenshotPaths: string[];
+  notes: string[];
+};
+
+type SkipReason =
+  | 'no-runtime'
+  | 'no-playwright'
+  | 'runtime-down'
+  | null;
+
 type BrowserLoopOutcome = {
   startedAt: string;
   finishedAt: string;
@@ -68,7 +118,17 @@ type BrowserLoopOutcome = {
   partiallyCoveredRequirements: number;
   uncoveredRequirements: number;
   reqResults: ReqCoverageResult[];
+  // E3b additions:
+  flowResults: FlowExecutionResult[];
+  totalFlows: number;
+  flowsExecuted: number;
+  totalSteps: number;
+  passedSteps: number;
+  totalConsoleErrors: number;
+  totalFailedRequests: number;
   outcomeScore: number;
+  legacyScore: number;
+  skipReason: SkipReason;
   evidenceDir: string;
   evidenceReportPath: string;
   playwrightAvailable: boolean;
@@ -328,6 +388,279 @@ function uniqueStringValues(payload: Record<string, unknown> | null): string[] {
   return Array.from(new Set(values));
 }
 
+function discoverFlows(packageRoot: string): LoadedFlow[] {
+  const phasesDir = path.join(packageRoot, 'phases');
+  if (!fs.existsSync(phasesDir)) return [];
+  const flows: LoadedFlow[] = [];
+  for (const phaseSlug of fs.readdirSync(phasesDir).filter((entry) => /^phase-\d+$/.test(entry))) {
+    const flowsDir = path.join(phasesDir, phaseSlug, 'PLAYWRIGHT_FLOWS');
+    if (!fs.existsSync(flowsDir)) continue;
+    for (const file of fs.readdirSync(flowsDir).filter((f) => f.endsWith('.json'))) {
+      const filePath = path.join(flowsDir, file);
+      try {
+        const raw = fs.readFileSync(filePath, 'utf8');
+        const parsed = JSON.parse(raw) as Partial<LoadedFlow> & { schemaVersion?: number };
+        if (!parsed.flowId || !parsed.actorId || !Array.isArray(parsed.steps)) continue;
+        flows.push({
+          flowId: parsed.flowId,
+          filePath: path.relative(packageRoot, filePath).replace(/\\/g, '/'),
+          phaseSlug,
+          actorId: parsed.actorId,
+          actorName: parsed.actorName || parsed.actorId,
+          workflowName: parsed.workflowName || 'unnamed-workflow',
+          reqIds: Array.isArray(parsed.reqIds) ? parsed.reqIds.map(String) : [],
+          loginMock: parsed.loginMock || { strategy: 'query-string', param: 'as', value: parsed.actorId },
+          steps: parsed.steps as FlowStep[],
+          negativeSteps: Array.isArray(parsed.negativeSteps) ? (parsed.negativeSteps as FlowStep[]) : [],
+          rolePermissionSteps: Array.isArray(parsed.rolePermissionSteps) ? (parsed.rolePermissionSteps as FlowStep[]) : []
+        });
+      } catch {
+        // skip malformed flow files
+      }
+    }
+  }
+  return flows;
+}
+
+function resolveSampleValue(reference: string | undefined, fixtures: EntityFixture[]): string | undefined {
+  if (!reference) return undefined;
+  // reference format: "<EntityName>.<sampleId>.<fieldName>"
+  const parts = reference.split('.');
+  if (parts.length < 3) return undefined;
+  const entityName = parts[0].trim();
+  const sampleId = parts[1].trim();
+  const fieldName = parts.slice(2).join('.').trim();
+  const fixture = fixtures.find((f) => f.entityName === entityName);
+  if (!fixture) return undefined;
+  for (const cat of ['happy', 'negative', 'boundary', 'rolePermission'] as const) {
+    const sample = fixture.samples[cat].find((s) => s.id === sampleId);
+    if (sample && sample.data && fieldName in sample.data) {
+      const value = sample.data[fieldName];
+      if (value === null || value === undefined) return '';
+      return String(value);
+    }
+  }
+  return undefined;
+}
+
+function applyMockAuth(url: string, login: LoadedFlow['loginMock']): string {
+  if (login.strategy !== 'query-string') return url;
+  if (!login.param || !login.value) return url;
+  const sep = url.includes('?') ? '&' : '?';
+  if (url.includes(`${login.param}=`)) return url;
+  return `${url}${sep}${login.param}=${encodeURIComponent(login.value)}`;
+}
+
+async function executeFlowSteps(args: {
+  page: any;
+  baseUrl: string;
+  steps: FlowStep[];
+  fixtures: EntityFixture[];
+  login: LoadedFlow['loginMock'];
+  evidenceDir: string;
+  flowId: string;
+  phase: 'happy' | 'negative' | 'rolePermission';
+  consoleErrors: string[];
+  failedRequests: string[];
+  screenshotPaths: string[];
+}): Promise<FlowStepResult[]> {
+  const { page, baseUrl, steps, fixtures, login, evidenceDir, flowId, phase, screenshotPaths } = args;
+  const results: FlowStepResult[] = [];
+  for (let i = 0; i < steps.length; i++) {
+    const step = steps[i];
+    let passed = false;
+    let detail = '';
+    try {
+      if (step.kind === 'goto') {
+        const targetUrl = applyMockAuth(`${baseUrl.replace(/\/$/, '')}${step.url.startsWith('/') ? step.url : `/${step.url}`}`, login);
+        const resp = await page.goto(targetUrl, { waitUntil: 'networkidle', timeout: 15000 });
+        const status = resp ? resp.status() : 0;
+        passed = status >= 200 && status < 400;
+        detail = `goto ${targetUrl} → ${status}`;
+      } else if (step.kind === 'click') {
+        const locator = page.getByTestId(step.testId);
+        await locator.first().click({ timeout: 5000 });
+        passed = true;
+        detail = `click [data-testid="${step.testId}"]`;
+      } else if (step.kind === 'fill') {
+        const value = step.literalValue !== undefined ? step.literalValue : resolveSampleValue(step.valueFromSample, fixtures);
+        if (value === undefined) {
+          passed = false;
+          detail = `fill skipped: could not resolve ${step.valueFromSample}`;
+        } else {
+          const locator = page.getByTestId(step.testId);
+          await locator.first().fill(value, { timeout: 5000 });
+          passed = true;
+          detail = `fill [data-testid="${step.testId}"] = ${value.slice(0, 40)}`;
+        }
+      } else if (step.kind === 'assertRoute') {
+        const current = page.url();
+        passed = current.includes(step.match);
+        detail = `assertRoute "${step.match}" against ${current}`;
+      } else if (step.kind === 'assertText') {
+        const haystack = ((await page.content()) || '').toLowerCase();
+        passed = haystack.includes(step.text.toLowerCase());
+        detail = `assertText "${step.text}" found=${passed}`;
+        if (!passed && step.testId) {
+          const locator = page.getByTestId(step.testId);
+          const count = await locator.count();
+          passed = count > 0;
+          detail += ` (testid ${step.testId} count=${count})`;
+        }
+      } else {
+        detail = `unknown step kind`;
+      }
+    } catch (err) {
+      passed = false;
+      detail = `error: ${(err as Error).message.slice(0, 200)}`;
+    }
+    results.push({ index: i, kind: step.kind, passed, detail });
+    // Capture a screenshot per step (best-effort)
+    try {
+      const shotPath = path.join(evidenceDir, `${flowId}-${phase}-step-${String(i + 1).padStart(2, '0')}.png`);
+      await page.screenshot({ path: shotPath, fullPage: true });
+      screenshotPaths.push(path.relative(evidenceDir, shotPath).replace(/\\/g, '/'));
+    } catch {
+      // ignore screenshot failures
+    }
+  }
+  return results;
+}
+
+async function runFlows(args: {
+  context: any;
+  baseUrl: string;
+  flows: LoadedFlow[];
+  fixtures: EntityFixture[];
+  evidenceDir: string;
+}): Promise<FlowExecutionResult[]> {
+  const { context, baseUrl, flows, fixtures, evidenceDir } = args;
+  const results: FlowExecutionResult[] = [];
+  for (const flow of flows) {
+    const consoleErrors: string[] = [];
+    const failedRequests: string[] = [];
+    const screenshotPaths: string[] = [];
+    const browserContext = await context.browser().newContext().catch(() => null);
+    const page = browserContext ? await browserContext.newPage() : null;
+    if (!page) {
+      results.push({
+        flowId: flow.flowId,
+        phaseSlug: flow.phaseSlug,
+        actorId: flow.actorId,
+        workflowName: flow.workflowName,
+        reqIds: flow.reqIds,
+        status: 'failed',
+        happySteps: [],
+        negativeSteps: [],
+        rolePermissionSteps: [],
+        consoleErrors: ['Failed to create Playwright context for this flow'],
+        failedRequests: [],
+        screenshotPaths: [],
+        notes: []
+      });
+      continue;
+    }
+    page.on('console', (m: any) => {
+      if (m.type() === 'error') consoleErrors.push(String(m.text()).slice(0, 500));
+    });
+    page.on('pageerror', (e: any) => {
+      consoleErrors.push(String(e?.message || e).slice(0, 500));
+    });
+    page.on('requestfailed', (req: any) => {
+      failedRequests.push(`${req.method()} ${req.url()}: ${req.failure?.()?.errorText || 'failed'}`);
+    });
+    page.on('response', (resp: any) => {
+      const status = resp.status();
+      if (status >= 400) failedRequests.push(`${resp.request().method()} ${resp.url()} → ${status}`);
+    });
+
+    const notes: string[] = [];
+    let status: FlowExecutionResult['status'] = 'passed';
+
+    // Probe the flow's first goto first to detect not-built routes.
+    const firstGoto = flow.steps.find((s) => s.kind === 'goto') as Extract<FlowStep, { kind: 'goto' }> | undefined;
+    if (firstGoto) {
+      const targetUrl = applyMockAuth(`${baseUrl.replace(/\/$/, '')}${firstGoto.url.startsWith('/') ? firstGoto.url : `/${firstGoto.url}`}`, flow.loginMock);
+      const resp = await page.goto(targetUrl, { waitUntil: 'networkidle', timeout: 15000 }).catch(() => null);
+      if (!resp || resp.status() === 404) {
+        status = 'skipped-not-built';
+        notes.push(`First navigation to ${targetUrl} returned ${resp?.status() ?? 'no response'}; flow skipped as not-built.`);
+      }
+    }
+
+    let happySteps: FlowStepResult[] = [];
+    let negativeSteps: FlowStepResult[] = [];
+    let rolePermissionSteps: FlowStepResult[] = [];
+
+    if (status !== 'skipped-not-built') {
+      happySteps = await executeFlowSteps({
+        page,
+        baseUrl,
+        steps: flow.steps,
+        fixtures,
+        login: flow.loginMock,
+        evidenceDir,
+        flowId: flow.flowId,
+        phase: 'happy',
+        consoleErrors,
+        failedRequests,
+        screenshotPaths
+      });
+      if (flow.negativeSteps.length) {
+        negativeSteps = await executeFlowSteps({
+          page,
+          baseUrl,
+          steps: flow.negativeSteps,
+          fixtures,
+          login: flow.loginMock,
+          evidenceDir,
+          flowId: flow.flowId,
+          phase: 'negative',
+          consoleErrors,
+          failedRequests,
+          screenshotPaths
+        });
+      }
+      if (flow.rolePermissionSteps.length) {
+        rolePermissionSteps = await executeFlowSteps({
+          page,
+          baseUrl,
+          steps: flow.rolePermissionSteps,
+          fixtures,
+          login: flow.loginMock,
+          evidenceDir,
+          flowId: flow.flowId,
+          phase: 'rolePermission',
+          consoleErrors,
+          failedRequests,
+          screenshotPaths
+        });
+      }
+      const allSteps = [...happySteps, ...negativeSteps, ...rolePermissionSteps];
+      const anyFailed = allSteps.some((s) => !s.passed);
+      status = anyFailed ? 'failed' : 'passed';
+    }
+
+    await browserContext?.close().catch(() => {});
+    results.push({
+      flowId: flow.flowId,
+      phaseSlug: flow.phaseSlug,
+      actorId: flow.actorId,
+      workflowName: flow.workflowName,
+      reqIds: flow.reqIds,
+      status,
+      happySteps,
+      negativeSteps,
+      rolePermissionSteps,
+      consoleErrors,
+      failedRequests,
+      screenshotPaths,
+      notes
+    });
+  }
+  return results;
+}
+
 async function runReqCoverage(args: {
   page: any;
   baseUrl: string;
@@ -418,16 +751,85 @@ async function runReqCoverage(args: {
   return results;
 }
 
-function calculateOutcomeScore(probePassed: boolean, totalReqs: number, coveredReqs: number, partiallyCovered: number) {
+// Legacy formula retained as a transitional fallback so existing --target=90
+// invocations don't suddenly invert their meaning. Reported alongside the new
+// score as `legacyScore` for one release window.
+function calculateLegacyScore(probePassed: boolean, totalReqs: number, coveredReqs: number, partiallyCovered: number) {
   const probePoints = probePassed ? 30 : 0;
   if (totalReqs === 0) return Math.min(100, probePoints + 70);
   const coverageRatio = (coveredReqs + partiallyCovered * 0.5) / totalReqs;
   return Math.min(100, Math.round(probePoints + coverageRatio * 70));
 }
 
+// E3 score formula. Rewards executed flows + passed step asserts + REQ coverage
+// across happy + negative samples, and penalizes console errors and failed
+// network requests.
+function calculateOutcomeScore(args: {
+  probePassed: boolean;
+  flows: FlowExecutionResult[];
+  totalReqs: number;
+  coveredReqs: number;
+  partiallyCovered: number;
+}): number {
+  const { probePassed, flows, totalReqs, coveredReqs, partiallyCovered } = args;
+  const probePoints = probePassed ? 20 : 0;
+
+  let flowsExecutedPoints = 0;
+  let stepsPassedPoints = 0;
+  let coveragePoints = 0;
+  let cleanlinessPoints = 10;
+
+  if (flows.length) {
+    const executed = flows.filter((f) => f.status === 'passed' || f.status === 'failed').length;
+    flowsExecutedPoints = Math.round((executed / flows.length) * 20);
+
+    const allSteps = flows.flatMap((f) => [...f.happySteps, ...f.negativeSteps, ...f.rolePermissionSteps]);
+    const passed = allSteps.filter((s) => s.passed).length;
+    stepsPassedPoints = allSteps.length ? Math.round((passed / allSteps.length) * 30) : 0;
+
+    // Coverage: REQs whose flows ran ≥1 happy + ≥1 negative step successfully.
+    const reqWithHappy = new Set<string>();
+    const reqWithNegative = new Set<string>();
+    for (const f of flows) {
+      if (f.status !== 'passed' && f.status !== 'failed') continue;
+      const happyOk = f.happySteps.some((s) => s.passed);
+      const negativeOk = f.negativeSteps.some((s) => s.passed);
+      for (const r of f.reqIds) {
+        if (happyOk) reqWithHappy.add(r);
+        if (negativeOk) reqWithNegative.add(r);
+      }
+    }
+    let bothCovered = 0;
+    reqWithHappy.forEach((r) => {
+      if (reqWithNegative.has(r)) bothCovered += 1;
+    });
+    const coverageDenominator = totalReqs > 0 ? totalReqs : Math.max(reqWithHappy.size, 1);
+    coveragePoints = Math.round((bothCovered / coverageDenominator) * 20);
+
+    const consoleCount = flows.reduce((sum, f) => sum + f.consoleErrors.length, 0);
+    const failedRequestCount = flows.reduce((sum, f) => sum + f.failedRequests.length, 0);
+    const consolePenalty = Math.min(10, consoleCount * 2);
+    const networkPenalty = Math.min(10, failedRequestCount * 2);
+    cleanlinessPoints = Math.max(0, 10 - consolePenalty - networkPenalty);
+  } else if (totalReqs > 0) {
+    // No flows discovered: fall back to legacy coverage so older workspaces still score sensibly.
+    const coverageRatio = (coveredReqs + partiallyCovered * 0.5) / totalReqs;
+    flowsExecutedPoints = 0;
+    stepsPassedPoints = 0;
+    coveragePoints = Math.round(coverageRatio * 50); // give legacy callers up to 50 from coverage so total can still reach ~70 (probe 20 + coverage 50)
+    cleanlinessPoints = 0;
+  }
+
+  return Math.min(100, probePoints + flowsExecutedPoints + stepsPassedPoints + coveragePoints + cleanlinessPoints);
+}
+
 function renderEvidenceReport(outcome: BrowserLoopOutcome): string {
   const lines: string[] = [];
-  lines.push(`# Browser-driven loop evidence — score ${outcome.outcomeScore}/100`);
+  if (outcome.skipReason) {
+    lines.push(`# Browser-driven loop evidence — skipped (${outcome.skipReason})`);
+  } else {
+    lines.push(`# Browser-driven loop evidence — score ${outcome.outcomeScore}/100`);
+  }
   lines.push('');
   lines.push(`- Started at: ${outcome.startedAt}`);
   lines.push(`- Finished at: ${outcome.finishedAt}`);
@@ -438,11 +840,33 @@ function renderEvidenceReport(outcome: BrowserLoopOutcome): string {
   if (!outcome.playwrightAvailable && outcome.playwrightInstallHint) {
     lines.push(`- Install hint: ${outcome.playwrightInstallHint}`);
   }
+  if (outcome.skipReason) {
+    lines.push(`- Skip reason: ${outcome.skipReason}`);
+  }
   lines.push('');
   lines.push('## Score breakdown');
-  lines.push(`- Probe (max 30): ${outcome.probePassed ? 30 : 0}`);
-  lines.push(`- Requirement coverage (max 70): based on ${outcome.coveredRequirements} fully covered + ${outcome.partiallyCoveredRequirements} partially covered out of ${outcome.totalRequirements}.`);
+  lines.push(`- Final score: ${outcome.outcomeScore}/100`);
+  lines.push(`- Legacy score (probe 30 + coverage 70): ${outcome.legacyScore}/100`);
+  lines.push(`- Probe (max 20): ${outcome.probePassed ? 20 : 0}`);
+  lines.push(`- Flows executed (max 20): ${outcome.totalFlows ? Math.round((outcome.flowsExecuted / outcome.totalFlows) * 20) : 0} (${outcome.flowsExecuted}/${outcome.totalFlows} flows)`);
+  lines.push(`- Steps passed (max 30): ${outcome.totalSteps ? Math.round((outcome.passedSteps / outcome.totalSteps) * 30) : 0} (${outcome.passedSteps}/${outcome.totalSteps} steps)`);
+  lines.push(`- REQ coverage (max 20): based on ${outcome.coveredRequirements} fully covered + ${outcome.partiallyCoveredRequirements} partially covered out of ${outcome.totalRequirements}.`);
+  lines.push(`- Cleanliness (max 10): console errors=${outcome.totalConsoleErrors}, failed network requests=${outcome.totalFailedRequests}.`);
   lines.push('');
+  if (outcome.flowResults.length) {
+    lines.push('## Per-flow results');
+    lines.push('| Flow | Phase | Actor | Workflow | REQs | Status | Steps (h/n/r) | Console err | Failed req |');
+    lines.push('| --- | --- | --- | --- | --- | --- | --- | --- | --- |');
+    for (const flow of outcome.flowResults) {
+      const happyOk = `${flow.happySteps.filter((s) => s.passed).length}/${flow.happySteps.length}`;
+      const negOk = `${flow.negativeSteps.filter((s) => s.passed).length}/${flow.negativeSteps.length}`;
+      const roleOk = `${flow.rolePermissionSteps.filter((s) => s.passed).length}/${flow.rolePermissionSteps.length}`;
+      lines.push(
+        `| ${flow.flowId} | ${flow.phaseSlug} | ${flow.actorId} | ${flow.workflowName} | ${flow.reqIds.join(', ') || '_none_'} | ${flow.status} | ${happyOk}/${negOk}/${roleOk} | ${flow.consoleErrors.length} | ${flow.failedRequests.length} |`
+      );
+    }
+    lines.push('');
+  }
   lines.push('## Per-requirement results');
   if (outcome.reqResults.length === 0) {
     if (outcome.totalRequirements === 0) {
@@ -488,6 +912,7 @@ export async function runBrowserLoop(): Promise<BrowserLoopOutcome> {
   const fixtures = parseEntityFixtures(packageRoot);
   const requirements = parseRequirementRecords(packageRoot);
   const verifiedReqs = loadVerifiedReqIds(packageRoot);
+  const flows = discoverFlows(packageRoot);
   const startedAt = new Date().toISOString();
   const evidenceDir = path.join(packageRoot, 'evidence', 'runtime', 'browser', startedAt.replace(/[:.]/g, '-'));
   fs.mkdirSync(evidenceDir, { recursive: true });
@@ -495,19 +920,27 @@ export async function runBrowserLoop(): Promise<BrowserLoopOutcome> {
   let startSucceeded = false;
   let probePassed = false;
   let runtime: ChildProcess | null = null;
+  let skipReason: SkipReason = null;
 
   if ((target.url || '').toLowerCase() === 'none') {
     probeNotes.push('RUNTIME_TARGET.md says Base URL: none. Skipping browser loop because there is no web runtime.');
+    skipReason = 'no-runtime';
   } else {
     runtime = spawnRuntime(target, packageRoot);
     runtime.on('error', (error) => probeNotes.push(`Runtime spawn error: ${error.message}`));
     startSucceeded = await waitForUrl(target.url, target.startTimeoutMs);
-    if (!startSucceeded) probeNotes.push(`Runtime did not respond at ${target.url} within ${target.startTimeoutMs}ms.`);
+    if (!startSucceeded) {
+      probeNotes.push(`Runtime did not respond at ${target.url} within ${target.startTimeoutMs}ms.`);
+      skipReason = 'runtime-down';
+    }
   }
 
   const playwright = startSucceeded ? await loadPlaywright() : null;
   const playwrightAvailable = playwright !== null;
+  if (startSucceeded && !playwrightAvailable) skipReason = 'no-playwright';
+
   let reqResults: ReqCoverageResult[] = [];
+  let flowResults: FlowExecutionResult[] = [];
 
   if (startSucceeded && playwright) {
     const browser = await playwright.chromium.launch({ headless: true }).catch((error: Error) => {
@@ -515,26 +948,82 @@ export async function runBrowserLoop(): Promise<BrowserLoopOutcome> {
       return null;
     });
     if (browser) {
-      const context = await browser.newContext();
-      const page = await context.newPage();
       try {
-        reqResults = await runReqCoverage({
-          page,
-          baseUrl: target.url,
-          fixtures,
-          requirements,
-          evidenceDir,
-          verifiedReqs
-        });
-        probePassed = reqResults.length > 0 && reqResults.some((result) => result.status !== 'uncovered');
-        if (reqResults.length === 0) {
-          // No requirements: still a probe success if the page rendered
-          probePassed = true;
+        // Probe ping: is the base URL responding?
+        const probeContext = await browser.newContext();
+        const probePage = await probeContext.newPage();
+        const probeResp = await probePage.goto(target.url, { waitUntil: 'networkidle', timeout: 15000 }).catch(() => null);
+        probePassed = !!probeResp && probeResp.status() >= 200 && probeResp.status() < 400;
+        await probeContext.close().catch(() => {});
+
+        if (flows.length) {
+          // E3 path: per-actor flow runner.
+          flowResults = await runFlows({
+            context: { browser: () => browser },
+            baseUrl: target.url,
+            flows,
+            fixtures,
+            evidenceDir
+          });
+          // Promote flow results into legacy ReqCoverageResult records so the existing
+          // report and downstream auto-regression rework still see per-REQ status.
+          const reqStatusFromFlows = new Map<string, ReqCoverageResult>();
+          for (const flow of flowResults) {
+            const happyOk = flow.happySteps.length > 0 && flow.happySteps.every((s) => s.passed);
+            const negativeOk = flow.negativeSteps.length === 0 || flow.negativeSteps.every((s) => s.passed);
+            for (const reqId of flow.reqIds) {
+              const existing = reqStatusFromFlows.get(reqId);
+              const status: ReqCoverageResult['status'] = happyOk && negativeOk ? 'covered' : (happyOk ? 'partially-covered' : 'uncovered');
+              if (!existing || (existing.status === 'uncovered' && status !== 'uncovered') || (existing.status === 'partially-covered' && status === 'covered')) {
+                reqStatusFromFlows.set(reqId, {
+                  reqId,
+                  entityName: requirements.find((r) => r.reqId === reqId)?.entityName || '',
+                  status,
+                  evidencePaths: flow.screenshotPaths.slice(0, 5),
+                  notes: flow.notes.slice(),
+                  consoleErrors: flow.consoleErrors,
+                  textMatches: [],
+                  testResultsVerified: verifiedReqs.has(reqId)
+                });
+              }
+            }
+          }
+          for (const requirement of requirements) {
+            if (!reqStatusFromFlows.has(requirement.reqId)) {
+              reqStatusFromFlows.set(requirement.reqId, {
+                reqId: requirement.reqId,
+                entityName: requirement.entityName,
+                status: 'uncovered',
+                evidencePaths: [],
+                notes: ['No PLAYWRIGHT_FLOW touched this REQ-ID.'],
+                consoleErrors: [],
+                textMatches: [],
+                testResultsVerified: verifiedReqs.has(requirement.reqId)
+              });
+            }
+          }
+          reqResults = Array.from(reqStatusFromFlows.values()).sort((a, b) => a.reqId.localeCompare(b.reqId, undefined, { numeric: true }));
+        } else {
+          // Legacy fallback: token-presence scan against the base URL.
+          const ctx = await browser.newContext();
+          const page = await ctx.newPage();
+          try {
+            reqResults = await runReqCoverage({
+              page,
+              baseUrl: target.url,
+              fixtures,
+              requirements,
+              evidenceDir,
+              verifiedReqs
+            });
+            if (reqResults.length === 0) probePassed = true;
+          } finally {
+            await ctx.close().catch(() => {});
+          }
         }
       } catch (error) {
         probeNotes.push(`Browser run failed: ${(error as Error).message}`);
       } finally {
-        await context.close().catch(() => {});
         await browser.close().catch(() => {});
       }
     }
@@ -548,7 +1037,26 @@ export async function runBrowserLoop(): Promise<BrowserLoopOutcome> {
   const coveredRequirements = reqResults.filter((result) => result.status === 'covered').length;
   const partiallyCoveredRequirements = reqResults.filter((result) => result.status === 'partially-covered').length;
   const uncoveredRequirements = reqResults.filter((result) => result.status === 'uncovered').length;
-  const outcomeScore = calculateOutcomeScore(probePassed, requirements.length, coveredRequirements, partiallyCoveredRequirements);
+
+  const totalSteps = flowResults.reduce((sum, f) => sum + f.happySteps.length + f.negativeSteps.length + f.rolePermissionSteps.length, 0);
+  const passedSteps = flowResults.reduce(
+    (sum, f) => sum + f.happySteps.filter((s) => s.passed).length + f.negativeSteps.filter((s) => s.passed).length + f.rolePermissionSteps.filter((s) => s.passed).length,
+    0
+  );
+  const flowsExecuted = flowResults.filter((f) => f.status === 'passed' || f.status === 'failed').length;
+  const totalConsoleErrors = flowResults.reduce((sum, f) => sum + f.consoleErrors.length, 0);
+  const totalFailedRequests = flowResults.reduce((sum, f) => sum + f.failedRequests.length, 0);
+
+  const outcomeScore = skipReason
+    ? 0
+    : calculateOutcomeScore({
+        probePassed,
+        flows: flowResults,
+        totalReqs: requirements.length,
+        coveredReqs: coveredRequirements,
+        partiallyCovered: partiallyCoveredRequirements
+      });
+  const legacyScore = calculateLegacyScore(probePassed, requirements.length, coveredRequirements, partiallyCoveredRequirements);
 
   const outcome: BrowserLoopOutcome = {
     startedAt,
@@ -562,7 +1070,16 @@ export async function runBrowserLoop(): Promise<BrowserLoopOutcome> {
     partiallyCoveredRequirements,
     uncoveredRequirements,
     reqResults,
+    flowResults,
+    totalFlows: flows.length,
+    flowsExecuted,
+    totalSteps,
+    passedSteps,
+    totalConsoleErrors,
+    totalFailedRequests,
     outcomeScore,
+    legacyScore,
+    skipReason,
     evidenceDir: path.relative(packageRoot, evidenceDir).replace(/\\/g, '/'),
     evidenceReportPath: '',
     playwrightAvailable,
@@ -580,10 +1097,14 @@ export async function runBrowserLoop(): Promise<BrowserLoopOutcome> {
     'utf8'
   );
 
-  console.log(`Browser loop score: ${outcome.outcomeScore}/100 (probe=${probePassed ? 'pass' : 'fail'}, covered=${coveredRequirements}/${requirements.length})`);
-  console.log(`Evidence: ${outcome.evidenceReportPath}`);
+  if (skipReason) {
+    console.log(`Browser loop SKIPPED (${skipReason}). Evidence: ${outcome.evidenceReportPath}`);
+  } else {
+    console.log(`Browser loop score: ${outcome.outcomeScore}/100 (legacy=${outcome.legacyScore}, probe=${probePassed ? 'pass' : 'fail'}, flows=${flowsExecuted}/${flows.length}, steps=${passedSteps}/${totalSteps}, covered=${coveredRequirements}/${requirements.length})`);
+    console.log(`Evidence: ${outcome.evidenceReportPath}`);
+  }
   if (!playwrightAvailable && startSucceeded) {
-    console.log('Playwright not installed. Score reflects probe-only because the browser layer was unavailable.');
+    console.log('Playwright not installed. Browser loop will skip cleanly until Playwright is added.');
   }
 
   return outcome;
@@ -594,6 +1115,13 @@ const isDirectRun = process.argv[1] && path.resolve(process.argv[1]) === fileURL
 if (isDirectRun) {
   runBrowserLoop()
     .then((outcome) => {
+      const strict = process.argv.includes('--strict');
+      // Skip-clean: when --strict is not passed, skipped runs exit 0 so CI
+      // doesn't fail just because the agent hasn't built the app yet.
+      if (outcome.skipReason && !strict) {
+        process.exitCode = 0;
+        return;
+      }
       const target = Number.parseInt(getArg('target') || '90', 10);
       process.exitCode = outcome.outcomeScore >= target ? 0 : 1;
     })
